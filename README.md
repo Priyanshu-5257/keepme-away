@@ -1,5 +1,5 @@
 <p align="center">
-	<img src="web/icons/Icon-512.png" width="120" alt="KeepMe Away logo" />
+	<img src="assets/icon.png" width="120" alt="KeepMe Away logo" />
 </p>
 
 <h1 align="center">KeepMe Away</h1>
