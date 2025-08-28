@@ -1,153 +1,92 @@
-<div align="center">
+<p align="center">
+	<img src="web/icons/Icon-512.png" width="120" alt="KeepMe Away logo" />
+</p>
 
-# Screen Protector App
+<h1 align="center">KeepMe Away</h1>
 
-Protect your eyes by keeping a healthy distance from the screen. This open‑source Flutter app uses on‑device ML to detect when you’re too close and gently nudges you back to safety.
+<p align="center">Protect your eyes by keeping a healthy distance from the screen. All processing happens on your device — no uploads, no tracking. 🔒📵</p>
 
-</div>
+---
 
-## Highlights
+## Why use it? 💡
 
-- Real face proximity detection (on‑device, privacy‑first)
-- One‑tap calibration for your comfortable viewing distance
-- Android foreground service with screen‑dimming/block overlay when too close
-- Configurable thresholds, warning time, and sensitivity
-- Battery‑friendly and fast, with no network access required
+- 👀 Reduce eye strain and fatigue
+- 🧒 Encourage healthy screen habits for kids
+- 📚 Help students maintain good posture while studying
+- 📱 For heavy phone users who sit too close without noticing
 
-## Demo (what to expect)
+## What it does 🛡️
 
-1) Grant camera and overlay permissions. 2) Calibrate once at a comfortable distance. 3) Start protection. 4) If you get too close, you’ll see a warning countdown, then a full‑screen overlay until you move back.
+- Uses the front camera to estimate how close your face is to the screen
+- Warns you if you’re too close and, on Android, can dim/block the screen until you move back
+- Works entirely offline and on-device — images aren’t saved or sent anywhere
 
-## Getting Started
+## Key features ✨
 
-### Prerequisites
-- Flutter 3.32.x (stable) or newer
-- Android SDK (API 24+)
-- Java 17
-- Kotlin 1.9+
+- 🔍 On‑device face proximity detection (privacy‑first)
+- 🎯 One‑time calibration at your comfortable distance
+- ⏱️ Warning countdown, then protective overlay (Android)
+- 🧩 Fine‑tune sensitivity, thresholds, and warning time
+- ⚡ Lightweight and battery‑friendly
 
-### Setup
-```bash
-git clone <repo-url>
-cd screen_protector_app
-flutter pub get
-# Optional: run tests
-flutter test
-```
+## Privacy first 🔒
 
-### Run
-```bash
-# Debug run on a connected device or emulator
-flutter run
+- 100% on‑device processing with Google ML Kit
+- No photos or video are stored
+- No data is transmitted; internet not required
 
-# Build APK
-flutter build apk --debug
-```
+## Get the app ⬇️
 
-## Permissions (Android)
+Go to the Releases page of this repository and download the latest APK for your device:
 
-The app requests and uses:
+- arm64‑v8a (most modern Android phones)
+- armeabi‑v7a (older devices)
+- x86_64 (emulators)
 
-- Camera: for on‑device face size measurement (no images stored/transmitted)
-- Overlay (SYSTEM_ALERT_WINDOW): to show a warning/black overlay when too close
-- Ignore battery optimizations (optional): to keep the foreground service responsive
+Then install the APK on your Android device.
 
-All processing happens on‑device using Google ML Kit. No data leaves your device.
+## Quick start 🚀
 
-## Features
+1. Install and open the app
+2. Grant Camera permission (and Overlay permission on Android)
+3. Calibrate once at a comfortable distance
+4. Tap “Start Protection” — you can minimize the app; it keeps guarding you
 
-- Face proximity detection using ML Kit (front camera)
-- Dynamic thresholding based on your calibrated baseline
-- Warning countdown before blocking
-- Full‑screen overlay when too close, auto‑dismiss on recovery
-- Settings to tune sensitivity, thresholds, and warning time
-- Robust calibration with outlier‑resistant median
+## Permissions explained (Android) 🔐
 
-## Architecture (short)
+- Camera: measure face size on‑device to infer distance
+- Display over other apps: show the warning/black overlay when too close
+- Ignore battery optimizations (optional): improve reliability in the background
 
-- Flutter UI (Dart) for calibration, settings, and control screens
-- Android service (Kotlin) does continuous detection in the background
-- ML Kit Face Detection for bounding box area → normalized area
-- Dynamic thresholds: trigger when area increases above baseline factor, with hysteresis
+## Settings ⚙️
 
-Key files:
-- `lib/screens/`: UI (home, calibration, settings)
-- `lib/services/face_detector.dart`: Flutter‑side detection (used for UI and fallback)
-- `android/app/src/main/kotlin/.../ProtectionService.kt`: Foreground service with detection logic
-- `android/app/src/main/kotlin/.../FaceDetectionManager.kt`: Camera+ML Kit pipeline
-- `lib/utils/prefs.dart`: Persistent settings and thresholds
+- Threshold factor: how close triggers a warning (higher = less sensitive)
+- Hysteresis: prevents flickering around the boundary
+- Warning time: how long to wait before blocking
 
-## Roadmap / Coming Soon
+## Supported platforms 📱
 
-1. Showing service in notification bar
-2. More smooth and fluid UI
-3. Using eye detection instead of face for better accuracy
+- Android 7.0+ fully supported (foreground service + overlay)
+- iOS builds exist but the overlay behavior is Android‑only
 
-Contributions are welcome! See below.
+## Troubleshooting 🧰
 
-## Contributing
+- Not detecting face? Ensure good lighting and front camera is unobstructed
+- Overlay didn’t appear? Grant “Display over other apps” permission
+- Stops in background? Disable battery optimizations for the app
+- Calibration failed? Sit still, keep your face in view, and retry
 
-Issues and PRs are appreciated. Suggested contributions:
+## FAQ ❓
 
-- Bug fixes and performance improvements
-- UI/UX refinements and animations
-- Eye‑detection pipeline (ML Kit Eyes/Contours) and better calibration flows
-- Accessibility and localization
+- Does the app record or upload video? No. It processes frames on‑device and discards them
+- Does it work offline? Yes
+- Battery impact? Minimal — tuned for efficiency
 
-Please open an issue to discuss significant changes before submitting a PR.
+## Contribute 🤝
 
-## Build Notes
+Issues and PRs are welcome. Ideas: improved UX, accessibility, localization, enhanced detection.
 
-- Keep Flutter and Android toolchains up to date
-- If ML Kit camera format changes are encountered, prefer YUV_420/NV21 and ensure rotation is handled (front camera often requires 270°)
-- Test on physical devices for accurate camera behavior
+## License 📄
 
-## Privacy
-
-- 100% on‑device processing
-- No photos or frames are stored or uploaded
-- No network is required for core functionality
-
-## License
-
-This project is open source under the MIT License. See `LICENSE`.
-
-## Release build and publishing
-
-1) Create `android/key.properties` (local only; not committed)
-
-Copy `android/key.properties.example` to `android/key.properties` and set values:
-
-```
-storePassword=your-store-pass
-keyPassword=your-key-pass
-keyAlias=screen_protector_key
-storeFile=/home/<you>/my-release-key.jks
-```
-
-2) Build signed release APKs
-
-```bash
-flutter clean
-flutter pub get
-flutter build apk --release --split-per-abi
-```
-
-APKs will be in `build/app/outputs/flutter-apk/`.
-
-3) Tag and create a GitHub Release (optional)
-
-```bash
-git tag -a v1.0.0+1 -m "Release v1.0.0+1"
-git push origin v1.0.0+1
-# If using GitHub CLI:
-gh release create v1.0.0+1 \
-	build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-	build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
-	build/app/outputs/flutter-apk/app-x86_64-release.apk \
-	-t "Screen Protector v1.0.0+1" \
-	-n "Release notes here"
-```
-
-Alternatively, draft a release on GitHub and upload the APKs.
+MIT — see `LICENSE`.
 
