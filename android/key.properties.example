@@ -1,0 +1,5 @@
+# Copy this to android/key.properties and fill in your values. Do NOT commit android/key.properties.
+storePassword=your-store-pass
+keyPassword=your-key-pass
+keyAlias=screen_protector_key
+storeFile=/home/your-username/my-release-key.jks
