@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     
     <application
-        android:label="screen_protector_app"
+        android:label="KeepMe Away"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

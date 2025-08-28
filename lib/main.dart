@@ -17,7 +17,7 @@ class ScreenProtectorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Screen Protector',
+      title: 'KeepMe Away',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,

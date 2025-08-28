@@ -1,6 +1,6 @@
 {
-    "name": "screen_protector_app",
-    "short_name": "screen_protector_app",
+    "name": "KeepMe Away",
+    "short_name": "KeepMe Away",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
