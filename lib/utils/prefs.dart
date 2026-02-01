@@ -71,4 +71,47 @@ class PrefsHelper {
     await _prefs?.setBool('is_calibrated', false);
     await _prefs?.setBool('is_protection_active', false);
   }
+
+  // Scheduled protection settings
+  static Future<void> setScheduledEnabled(bool value) async {
+    await _prefs?.setBool('scheduled_enabled', value);
+  }
+
+  static bool getScheduledEnabled() {
+    return _prefs?.getBool('scheduled_enabled') ?? false;
+  }
+
+  static Future<void> setScheduleStartHour(int hour) async {
+    await _prefs?.setInt('schedule_start_hour', hour);
+  }
+
+  static int getScheduleStartHour() {
+    return _prefs?.getInt('schedule_start_hour') ?? 9; // Default 9 AM
+  }
+
+  static Future<void> setScheduleEndHour(int hour) async {
+    await _prefs?.setInt('schedule_end_hour', hour);
+  }
+
+  static int getScheduleEndHour() {
+    return _prefs?.getInt('schedule_end_hour') ?? 21; // Default 9 PM
+  }
+
+  /// Check if current time is within scheduled protection hours
+  static bool isWithinSchedule() {
+    if (!getScheduledEnabled()) return false;
+    
+    final now = DateTime.now();
+    final currentHour = now.hour;
+    final startHour = getScheduleStartHour();
+    final endHour = getScheduleEndHour();
+    
+    if (startHour <= endHour) {
+      // Normal range (e.g., 9 AM - 9 PM)
+      return currentHour >= startHour && currentHour < endHour;
+    } else {
+      // Overnight range (e.g., 10 PM - 6 AM)
+      return currentHour >= startHour || currentHour < endHour;
+    }
+  }
 }
