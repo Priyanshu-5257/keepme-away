@@ -30,7 +30,22 @@ class FaceDetectionManager(private val context: Context) {
     private var cameraId: String? = null
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessTime = 0L
-    private val processingInterval = 500L // Process every 500ms to avoid overload
+    private val processingInterval = 300L // Process every 300ms for balanced battery/responsiveness
+    
+    // Frame throttling
+    private var frameCount = 0
+    private val frameSkipCount = 2 // Process every Nth frame
+    
+    // Adaptive detection
+    private var consecutiveStableReadings = 0
+    private var lastArea = 0f
+    private val stabilityThreshold = 0.05f // 5% change considered stable (increased from 1%)
+    private val stableCountForSlowdown = 10
+    private var adaptiveSkipMultiplier = 1
+    
+    // Smoothing - moving average to reduce jitter
+    private val recentAreas = mutableListOf<Float>()
+    private val smoothingWindowSize = 5 // Average over last 5 readings
     
     // ML Kit face detector with optimized settings
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
@@ -143,9 +158,11 @@ class FaceDetectionManager(private val context: Context) {
         // Use same resolution as Flutter camera for consistency
         // Flutter typically uses the device's default camera resolution
         // For consistency, we'll use a standard resolution
-        imageReader = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 3)
+        // Use 320x240 for better battery (face detection doesn't need high resolution)
+        // Use 4 buffers to prevent "Unable to acquire buffer" warnings
+        imageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 4)
         imageReader?.setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
-        Log.d(TAG, "ImageReader setup: 640x480 with 3 buffers")
+        Log.d(TAG, "ImageReader setup: 320x240 with 4 buffers (optimized for battery)")
     }
     
     private val stateCallback = object : CameraDevice.StateCallback() {
@@ -222,10 +239,18 @@ class FaceDetectionManager(private val context: Context) {
     }
     
     private val onImageAvailableListener = ImageReader.OnImageAvailableListener { reader ->
-        // Throttle processing to avoid overwhelming ML Kit
+        // Frame skip throttling (battery optimization)
+        frameCount++
+        val effectiveSkip = frameSkipCount * adaptiveSkipMultiplier
+        if (frameCount % effectiveSkip != 0) {
+            val image = reader.acquireLatestImage()
+            image?.close()
+            return@OnImageAvailableListener
+        }
+        
+        // Time-based throttle as backup
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastProcessTime < processingInterval) {
-            // Skip this frame - too soon since last processing
             val image = reader.acquireLatestImage()
             image?.close()
             return@OnImageAvailableListener
@@ -265,23 +290,44 @@ class FaceDetectionManager(private val context: Context) {
                         Log.d(TAG, "ML Kit processing - Found ${faces.size} faces")
                         
                         if (faces.isEmpty()) {
-                            // No face detected
+                            // No face detected - clear smoothing buffer
+                            recentAreas.clear()
                             callback?.onFaceDetected(0.0f)
                             Log.d(TAG, "No faces detected")
                         } else {
+                            // Find the largest face (by bounding box area)
+                            var largestArea = 0.0
                             for (face in faces) {
                                 val bounds = face.boundingBox
-                                // EXACT same calculation as Flutter
                                 val faceArea = bounds.width() * bounds.height()
                                 val imageArea = image.width * image.height
                                 val relativeArea = faceArea.toDouble() / imageArea.toDouble()
-                                totalArea += relativeArea
                                 
-                                Log.d(TAG, "Android Face detected - Area: $relativeArea, Bounds: ${bounds.width()}x${bounds.height()}, ImageSize: ${image.width}x${image.height}")
+                                if (relativeArea > largestArea) {
+                                    largestArea = relativeArea
+                                }
                             }
                             
-                            // Always report detection result
-                            callback?.onFaceDetected(totalArea.toFloat())
+                            // Add to smoothing buffer
+                            recentAreas.add(largestArea.toFloat())
+                            if (recentAreas.size > smoothingWindowSize) {
+                                recentAreas.removeAt(0)
+                            }
+                            
+                            // Calculate smoothed area (moving average)
+                            val smoothedArea = if (recentAreas.isNotEmpty()) {
+                                recentAreas.sum() / recentAreas.size
+                            } else {
+                                largestArea.toFloat()
+                            }
+                            
+                            Log.d(TAG, "Face detected - Raw: $largestArea, Smoothed: $smoothedArea, Window: ${recentAreas.size}")
+                            
+                            // Update adaptive mode based on stability
+                            updateAdaptiveMode(smoothedArea)
+                            
+                            // Report smoothed result
+                            callback?.onFaceDetected(smoothedArea)
                         }
                         
                     } catch (e: Exception) {
@@ -325,5 +371,24 @@ class FaceDetectionManager(private val context: Context) {
         } finally {
             cameraOpenCloseLock.release()
         }
+    }
+    
+    private fun updateAdaptiveMode(currentArea: Float) {
+        val change = kotlin.math.abs(currentArea - lastArea)
+        val relativeChange = if (lastArea > 0) change / lastArea else 1f
+        
+        if (relativeChange < stabilityThreshold) {
+            consecutiveStableReadings++
+            if (consecutiveStableReadings >= stableCountForSlowdown) {
+                // User is stable, slow down detection to save battery
+                adaptiveSkipMultiplier = 2
+            }
+        } else {
+            // Movement detected, speed up detection
+            consecutiveStableReadings = 0
+            adaptiveSkipMultiplier = 1
+        }
+        
+        lastArea = currentArea
     }
 }

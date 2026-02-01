@@ -13,6 +13,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late double _hysteresisGap;
   late int _warningTime;
   late double _detectionThreshold;
+  
+  // Schedule settings
+  late bool _scheduledEnabled;
+  late int _scheduleStartHour;
+  late int _scheduleEndHour;
 
   @override
   void initState() {
@@ -25,6 +30,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _hysteresisGap = PrefsHelper.getHysteresisGap();
     _warningTime = PrefsHelper.getWarningTime();
     _detectionThreshold = PrefsHelper.getDetectionThreshold();
+    _scheduledEnabled = PrefsHelper.getScheduledEnabled();
+    _scheduleStartHour = PrefsHelper.getScheduleStartHour();
+    _scheduleEndHour = PrefsHelper.getScheduleEndHour();
   }
 
   Future<void> _saveSettings() async {
@@ -32,6 +40,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await PrefsHelper.setHysteresisGap(_hysteresisGap);
     await PrefsHelper.setWarningTime(_warningTime);
     await PrefsHelper.setDetectionThreshold(_detectionThreshold);
+    await PrefsHelper.setScheduledEnabled(_scheduledEnabled);
+    await PrefsHelper.setScheduleStartHour(_scheduleStartHour);
+    await PrefsHelper.setScheduleEndHour(_scheduleEndHour);
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -46,7 +57,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _hysteresisGap = 0.15;
       _warningTime = 3;
       _detectionThreshold = 0.5;
+      _scheduledEnabled = false;
+      _scheduleStartHour = 9;
+      _scheduleEndHour = 21;
     });
+  }
+
+  String _formatHour(int hour) {
+    final h = hour % 12 == 0 ? 12 : hour % 12;
+    final ampm = hour < 12 ? 'AM' : 'PM';
+    return '$h:00 $ampm';
   }
 
   @override
@@ -201,6 +221,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   Text('Enter threshold: ${(PrefsHelper.getBaselineArea() * _thresholdFactor).toStringAsFixed(4)}'),
                   Text('Exit threshold: ${(PrefsHelper.getBaselineArea() * (_thresholdFactor - _hysteresisGap).clamp(0.8, double.infinity)).toStringAsFixed(4)}'),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Scheduled Protection Card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.schedule, color: Colors.purple),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Scheduled Protection',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Automatically enable protection during set hours',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  SwitchListTile(
+                    title: const Text('Enable Schedule'),
+                    subtitle: Text(
+                      _scheduledEnabled 
+                          ? 'Protection auto-starts ${_formatHour(_scheduleStartHour)} - ${_formatHour(_scheduleEndHour)}'
+                          : 'Manual control only',
+                    ),
+                    value: _scheduledEnabled,
+                    onChanged: (value) {
+                      setState(() => _scheduledEnabled = value);
+                    },
+                  ),
+                  
+                  if (_scheduledEnabled) ...[
+                    const SizedBox(height: 8),
+                    
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Start Time', style: TextStyle(fontWeight: FontWeight.bold)),
+                              DropdownButton<int>(
+                                value: _scheduleStartHour,
+                                isExpanded: true,
+                                items: List.generate(24, (i) => DropdownMenuItem(
+                                  value: i,
+                                  child: Text(_formatHour(i)),
+                                )),
+                                onChanged: (v) => setState(() => _scheduleStartHour = v!),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('End Time', style: TextStyle(fontWeight: FontWeight.bold)),
+                              DropdownButton<int>(
+                                value: _scheduleEndHour,
+                                isExpanded: true,
+                                items: List.generate(24, (i) => DropdownMenuItem(
+                                  value: i,
+                                  child: Text(_formatHour(i)),
+                                )),
+                                onChanged: (v) => setState(() => _scheduleEndHour = v!),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -5,6 +5,7 @@ import '../services/protection_service.dart';
 import '../utils/prefs.dart';
 import 'calibration_screen.dart';
 import 'settings_screen.dart';
+import 'statistics_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -110,6 +111,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _navigateToStatistics() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const StatisticsScreen()),
+    );
+  }
+
   Future<void> _resetCalibration() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -155,6 +162,11 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Screen Protector'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          IconButton(
+            onPressed: _navigateToStatistics,
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Statistics',
+          ),
           IconButton(
             onPressed: _navigateToSettings,
             icon: const Icon(Icons.settings),

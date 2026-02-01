@@ -70,7 +70,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
       _controller = CameraController(
         frontCamera,
-        ResolutionPreset.medium,
+        ResolutionPreset.low, // Use low resolution for better battery (320x240 is enough for face detection)
         enableAudio: false,
       );
 
@@ -360,7 +360,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       ),
       body: Column(
         children: [
-          // Camera Preview
+          // Camera Preview - fills space naturally like a modern camera app
           Expanded(
             flex: 3,
             child: Container(
@@ -369,7 +369,19 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               child: _isCameraInitialized && 
                      _controller != null && 
                      _controller!.value.isInitialized
-                  ? CameraPreview(_controller!)
+                  ? ClipRect(
+                      child: OverflowBox(
+                        alignment: Alignment.center,
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: _controller!.value.previewSize?.height ?? 1,
+                            height: _controller!.value.previewSize?.width ?? 1,
+                            child: CameraPreview(_controller!),
+                          ),
+                        ),
+                      ),
+                    )
                   : const Center(
                       child: CircularProgressIndicator(),
                     ),
