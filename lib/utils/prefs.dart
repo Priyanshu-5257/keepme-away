@@ -114,4 +114,38 @@ class PrefsHelper {
       return currentHour >= startHour || currentHour < endHour;
     }
   }
+
+  // Feedback settings
+  static Future<void> setHapticsEnabled(bool value) async {
+    await _prefs?.setBool('haptics_enabled', value);
+  }
+
+  static bool getHapticsEnabled() {
+    return _prefs?.getBool('haptics_enabled') ?? true; // Enabled by default
+  }
+
+  static Future<void> setSoundEnabled(bool value) async {
+    await _prefs?.setBool('sound_enabled', value);
+  }
+
+  static bool getSoundEnabled() {
+    return _prefs?.getBool('sound_enabled') ?? false; // Disabled by default
+  }
+
+  // Break reminder settings
+  static Future<void> setBreakReminderEnabled(bool value) async {
+    await _prefs?.setBool('break_reminder_enabled', value);
+  }
+
+  static bool getBreakReminderEnabled() {
+    return _prefs?.getBool('break_reminder_enabled') ?? false;
+  }
+
+  static Future<void> setBreakReminderInterval(int minutes) async {
+    await _prefs?.setInt('break_reminder_interval', minutes);
+  }
+
+  static int getBreakReminderInterval() {
+    return _prefs?.getInt('break_reminder_interval') ?? 20; // Default 20 minutes
+  }
 }

@@ -1,4 +1,4 @@
-package com.example.screen_protector_app
+package io.github.priyanshu5257.keepmeaway
 
 import android.content.Context
 import android.graphics.ImageFormat
@@ -8,13 +8,14 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import android.util.Size
-import android.view.Surface
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.face.FaceDetection
-import com.google.mlkit.vision.face.FaceDetectorOptions
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
+import java.io.FileInputStream
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
+import org.tensorflow.lite.Interpreter
 
 class FaceDetectionManager(private val context: Context) {
     private val TAG = "FaceDetectionManager"
@@ -39,7 +40,7 @@ class FaceDetectionManager(private val context: Context) {
     // Adaptive detection
     private var consecutiveStableReadings = 0
     private var lastArea = 0f
-    private val stabilityThreshold = 0.05f // 5% change considered stable (increased from 1%)
+    private val stabilityThreshold = 0.05f // 5% change considered stable
     private val stableCountForSlowdown = 10
     private var adaptiveSkipMultiplier = 1
     
@@ -47,16 +48,35 @@ class FaceDetectionManager(private val context: Context) {
     private val recentAreas = mutableListOf<Float>()
     private val smoothingWindowSize = 5 // Average over last 5 readings
     
-    // ML Kit face detector with optimized settings
-    private val faceDetectorOptions = FaceDetectorOptions.Builder()
-        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
-        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
-        .setMinFaceSize(0.15f) // Larger minimum size for better performance
-        .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-        .build()
+    // TFLite interpreter for BlazeFace model
+    private var interpreter: Interpreter? = null
+    private val INPUT_SIZE = 128
     
-    private val faceDetector = FaceDetection.getClient(faceDetectorOptions)
+    init {
+        loadModel()
+    }
+    
+    private fun loadModel() {
+        try {
+            val modelBuffer = loadModelFile()
+            val options = Interpreter.Options().apply {
+                setNumThreads(2)
+            }
+            interpreter = Interpreter(modelBuffer, options)
+            Log.d(TAG, "BlazeFace TFLite model loaded successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TFLite model", e)
+        }
+    }
+    
+    private fun loadModelFile(): MappedByteBuffer {
+        val fileDescriptor = context.assets.openFd("flutter_assets/assets/face_detection_short_range.tflite")
+        val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
+        val fileChannel = inputStream.channel
+        val startOffset = fileDescriptor.startOffset
+        val declaredLength = fileDescriptor.declaredLength
+        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+    }
     
     interface FaceDetectionCallback {
         fun onFaceDetected(area: Float)
@@ -155,9 +175,6 @@ class FaceDetectionManager(private val context: Context) {
     }
     
     private fun setupImageReader() {
-        // Use same resolution as Flutter camera for consistency
-        // Flutter typically uses the device's default camera resolution
-        // For consistency, we'll use a standard resolution
         // Use 320x240 for better battery (face detection doesn't need high resolution)
         // Use 4 buffers to prevent "Unable to acquire buffer" warnings
         imageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 4)
@@ -279,81 +296,178 @@ class FaceDetectionManager(private val context: Context) {
     
     private fun processImageSafely(image: Image) {
         try {
-            // Handle different camera orientations for front camera
-            val inputImage = InputImage.fromMediaImage(image, 270) // Try 270 degrees for front camera
+            val tfliteInterpreter = interpreter
+            if (tfliteInterpreter == null) {
+                Log.e(TAG, "TFLite interpreter not initialized")
+                callback?.onFaceDetected(0.0f)
+                image.close()
+                isProcessing.set(false)
+                return
+            }
             
-            faceDetector.process(inputImage)
-                .addOnSuccessListener { faces ->
-                    try {
-                        var totalArea = 0.0
-                        
-                        Log.d(TAG, "ML Kit processing - Found ${faces.size} faces")
-                        
-                        if (faces.isEmpty()) {
-                            // No face detected - clear smoothing buffer
-                            recentAreas.clear()
-                            callback?.onFaceDetected(0.0f)
-                            Log.d(TAG, "No faces detected")
-                        } else {
-                            // Find the largest face (by bounding box area)
-                            var largestArea = 0.0
-                            for (face in faces) {
-                                val bounds = face.boundingBox
-                                val faceArea = bounds.width() * bounds.height()
-                                val imageArea = image.width * image.height
-                                val relativeArea = faceArea.toDouble() / imageArea.toDouble()
-                                
-                                if (relativeArea > largestArea) {
-                                    largestArea = relativeArea
-                                }
-                            }
-                            
-                            // Add to smoothing buffer
-                            recentAreas.add(largestArea.toFloat())
-                            if (recentAreas.size > smoothingWindowSize) {
-                                recentAreas.removeAt(0)
-                            }
-                            
-                            // Calculate smoothed area (moving average)
-                            val smoothedArea = if (recentAreas.isNotEmpty()) {
-                                recentAreas.sum() / recentAreas.size
-                            } else {
-                                largestArea.toFloat()
-                            }
-                            
-                            Log.d(TAG, "Face detected - Raw: $largestArea, Smoothed: $smoothedArea, Window: ${recentAreas.size}")
-                            
-                            // Update adaptive mode based on stability
-                            updateAdaptiveMode(smoothedArea)
-                            
-                            // Report smoothed result
-                            callback?.onFaceDetected(smoothedArea)
-                        }
-                        
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error processing face detection result", e)
-                    } finally {
-                        image.close()
-                        isProcessing.set(false)
-                    }
+            // Convert YUV image to RGB float array for BlazeFace input
+            val inputArray = preprocessImage(image)
+            
+            // Prepare output buffers for BlazeFace
+            // BlazeFace short range outputs:
+            // Output 0: [1, 896, 16] - regressors (bounding box coordinates)
+            // Output 1: [1, 896, 1] - classificators (confidence scores)
+            val regressors = Array(1) { Array(896) { FloatArray(16) } }
+            val classificators = Array(1) { Array(896) { FloatArray(1) } }
+            
+            val outputMap = HashMap<Int, Any>()
+            outputMap[0] = regressors
+            outputMap[1] = classificators
+            
+            // Run inference
+            tfliteInterpreter.runForMultipleInputsOutputs(arrayOf(inputArray), outputMap)
+            
+            // Parse results
+            var maxConfidence = 0f
+            var bestIdx = -1
+            
+            for (i in 0 until 896) {
+                val confidence = sigmoid(classificators[0][i][0])
+                if (confidence > maxConfidence) {
+                    maxConfidence = confidence
+                    bestIdx = i
                 }
-                .addOnFailureListener { e ->
-                    try {
-                        Log.e(TAG, "Face detection failed", e)
-                        // For failed detection, report no face
-                        callback?.onFaceDetected(0.0f)
-                    } catch (ex: Exception) {
-                        Log.e(TAG, "Error handling detection failure", ex)
-                    } finally {
-                        image.close()
-                        isProcessing.set(false)
-                    }
+            }
+            
+            Log.d(TAG, "TFLite processing - Max confidence: $maxConfidence at idx: $bestIdx")
+            
+            if (maxConfidence > 0.5f && bestIdx >= 0) {
+                // Extract bounding box from regressors
+                // BlazeFace uses SSD anchors, the regressor values are offsets
+                val anchor = getAnchor(bestIdx)
+                
+                val cx = regressors[0][bestIdx][0] / INPUT_SIZE + anchor.first
+                val cy = regressors[0][bestIdx][1] / INPUT_SIZE + anchor.second
+                val w = regressors[0][bestIdx][2] / INPUT_SIZE
+                val h = regressors[0][bestIdx][3] / INPUT_SIZE
+                
+                // Calculate face area relative to image
+                val faceArea = (w * h).coerceIn(0f, 1f)
+                
+                // Add to smoothing buffer
+                recentAreas.add(faceArea)
+                if (recentAreas.size > smoothingWindowSize) {
+                    recentAreas.removeAt(0)
                 }
                 
+                // Calculate smoothed area (moving average)
+                val smoothedArea = if (recentAreas.isNotEmpty()) {
+                    recentAreas.sum() / recentAreas.size
+                } else {
+                    faceArea
+                }
+                
+                Log.d(TAG, "Face detected - Raw: $faceArea, Smoothed: $smoothedArea, Confidence: $maxConfidence")
+                
+                // Update adaptive mode based on stability
+                updateAdaptiveMode(smoothedArea)
+                
+                // Report smoothed result
+                callback?.onFaceDetected(smoothedArea)
+            } else {
+                // No face detected - clear smoothing buffer
+                recentAreas.clear()
+                callback?.onFaceDetected(0.0f)
+                Log.d(TAG, "No faces detected (max confidence: $maxConfidence)")
+            }
+            
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating InputImage", e)
+            Log.e(TAG, "Error processing image with TFLite", e)
+            callback?.onFaceDetected(0.0f)
+        } finally {
             image.close()
             isProcessing.set(false)
+        }
+    }
+    
+    private fun sigmoid(x: Float): Float {
+        return (1.0f / (1.0f + Math.exp(-x.toDouble()))).toFloat()
+    }
+    
+    /**
+     * Preprocess YUV_420_888 image to float array for BlazeFace input.
+     * BlazeFace expects [1, 128, 128, 3] float input normalized to [-1, 1].
+     */
+    private fun preprocessImage(image: Image): Array<Array<Array<FloatArray>>> {
+        val width = image.width
+        val height = image.height
+        
+        val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
+        
+        val yRowStride = image.planes[0].rowStride
+        val uvRowStride = image.planes[1].rowStride
+        val uvPixelStride = image.planes[1].pixelStride
+        
+        val inputArray = Array(1) { Array(INPUT_SIZE) { Array(INPUT_SIZE) { FloatArray(3) } } }
+        
+        val scaleX = width.toFloat() / INPUT_SIZE
+        val scaleY = height.toFloat() / INPUT_SIZE
+        
+        for (y in 0 until INPUT_SIZE) {
+            for (x in 0 until INPUT_SIZE) {
+                val srcX = (x * scaleX).toInt().coerceIn(0, width - 1)
+                val srcY = (y * scaleY).toInt().coerceIn(0, height - 1)
+                
+                val yIdx = srcY * yRowStride + srcX
+                val uvIdx = (srcY / 2) * uvRowStride + (srcX / 2) * uvPixelStride
+                
+                val yVal = (yBuffer.get(yIdx).toInt() and 0xFF).toFloat()
+                val uVal = if (uvIdx < uBuffer.capacity()) (uBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
+                val vVal = if (uvIdx < vBuffer.capacity()) (vBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
+                
+                // YUV to RGB conversion
+                var r = yVal + 1.370705f * (vVal - 128f)
+                var g = yVal - 0.337633f * (uVal - 128f) - 0.698001f * (vVal - 128f)
+                var b = yVal + 1.732446f * (uVal - 128f)
+                
+                r = r.coerceIn(0f, 255f)
+                g = g.coerceIn(0f, 255f)
+                b = b.coerceIn(0f, 255f)
+                
+                // Normalize to [-1, 1] for BlazeFace
+                inputArray[0][y][x][0] = (r / 127.5f) - 1.0f
+                inputArray[0][y][x][1] = (g / 127.5f) - 1.0f
+                inputArray[0][y][x][2] = (b / 127.5f) - 1.0f
+            }
+        }
+        
+        return inputArray
+    }
+    
+    /**
+     * Generate BlazeFace SSD anchors.
+     * BlazeFace uses a specific anchor generation scheme.
+     */
+    private fun getAnchor(index: Int): Pair<Float, Float> {
+        // BlazeFace short range uses 2 anchor layers:
+        // Layer 0: stride 8, 2 anchors per position -> 16x16x2 = 512 anchors
+        // Layer 1: stride 16, 6 anchors per position -> 8x8x6 = 384 anchors
+        // Total: 896 anchors
+        
+        if (index < 512) {
+            // Layer 0: 16x16 grid, 2 anchors per cell
+            val cellIdx = index / 2
+            val gridX = cellIdx % 16
+            val gridY = cellIdx / 16
+            val cx = (gridX + 0.5f) / 16f
+            val cy = (gridY + 0.5f) / 16f
+            return Pair(cx, cy)
+        } else {
+            // Layer 1: 8x8 grid, 6 anchors per cell
+            val adjustedIdx = index - 512
+            val cellIdx = adjustedIdx / 6
+            val gridX = cellIdx % 8
+            val gridY = cellIdx / 8
+            val cx = (gridX + 0.5f) / 8f
+            val cy = (gridY + 0.5f) / 8f
+            return Pair(cx, cy)
         }
     }
     

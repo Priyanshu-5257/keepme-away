@@ -1,4 +1,4 @@
-package com.example.screen_protector_app
+package io.github.priyanshu5257.keepmeaway
 
 import android.content.Intent
 import android.net.Uri
@@ -10,7 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity(), FaceDetectionManager.FaceDetectionCallback {
     private val CHANNEL = "protection_service"
-    private val FACE_DETECTION_CHANNEL = "com.example.screen_protector_app/face_detection"
+    private val FACE_DETECTION_CHANNEL = "io.github.priyanshu5257.keepmeaway/face_detection"
     private val OVERLAY_PERMISSION_REQUEST_CODE = 1001
     
     // Calibration face detection
@@ -158,7 +158,7 @@ class MainActivity : FlutterActivity(), FaceDetectionManager.FaceDetectionCallba
         result.success(true)
     }
     
-    // Calibration methods using Android ML Kit
+    // Calibration methods using TFLite face detection
     private fun startCalibrationMode(result: MethodChannel.Result) {
         try {
             calibrationFaceDetector = FaceDetectionManager(this).apply {

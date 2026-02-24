@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import '../services/protection_service.dart';
 import '../utils/prefs.dart';
+import '../utils/page_transitions.dart';
 import 'calibration_screen.dart';
 import 'settings_screen.dart';
 import 'statistics_screen.dart';
@@ -107,13 +108,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _navigateToSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+      PageTransitions.slideFromRight(const SettingsScreen()),
     );
   }
 
   void _navigateToStatistics() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const StatisticsScreen()),
+      PageTransitions.fadeScale(const StatisticsScreen()),
     );
   }
 
@@ -159,7 +160,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Screen Protector'),
+        title: const Text('KeepMe Away'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
@@ -326,7 +327,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     '• The app monitors your face distance using the front camera\n'
                     '• When you get too close, you\'ll see a warning countdown\n'
                     '• If you stay too close, the screen will be blocked\n'
-                    '• All processing is done on-device for privacy',
+                    '• All processing is done on-device for privacy\n'
+                    '• Powered by open-source models (no Google services)',
                     style: TextStyle(fontSize: 12),
                   ),
                   if (Platform.isAndroid) ...[

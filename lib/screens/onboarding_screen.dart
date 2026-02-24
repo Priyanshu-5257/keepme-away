@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
@@ -79,7 +80,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
       final result = await platform.invokeMethod('checkOverlayPermission');
       return result == true;
     } catch (e) {
-      print('Error checking overlay permission: $e');
+      if (kDebugMode) print('Error checking overlay permission: $e');
       return false;
     }
   }
@@ -100,7 +101,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
       _overlayPermissionGranted = await _checkOverlayPermission();
       setState(() {});
     } catch (e) {
-      print('Error requesting overlay permission: $e');
+      if (kDebugMode) print('Error requesting overlay permission: $e');
     }
   }
 
@@ -111,7 +112,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
       const platform = MethodChannel('protection_service');
       await platform.invokeMethod('requestIgnoreBatteryOptimizations');
     } catch (e) {
-      print('Error requesting battery optimization: $e');
+      if (kDebugMode) print('Error requesting battery optimization: $e');
     }
   }
 
@@ -133,7 +134,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Screen Protector Setup'),
+        title: const Text('KeepMe Away Setup'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Padding(
@@ -142,12 +143,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Welcome to Screen Protector',
+              'Welcome to KeepMe Away',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
             const Text(
-              'This app helps protect your eyes by monitoring your distance from the screen using the front camera. All detection is done on-device - no images are saved or transmitted.',
+              'This app helps protect your eyes by monitoring your distance from the screen using the front camera. All detection is done on-device with open-source models — no images are saved or transmitted.',
               style: TextStyle(fontSize: 16),
             ),
             const SizedBox(height: 32),

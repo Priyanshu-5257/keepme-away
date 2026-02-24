@@ -1,4 +1,4 @@
-package com.example.screen_protector_app
+package io.github.priyanshu5257.keepmeaway
 
 import android.app.*
 import android.content.Context
@@ -7,6 +7,9 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -266,6 +269,7 @@ class ProtectionService : Service(), FaceDetectionManager.FaceDetectionCallback 
                 warningStartTime = currentTime
                 updateNotification("Warning: Face ${increasePercentage.toInt()}% closer than baseline!")
                 android.util.Log.d("ProtectionService", "WARNING STARTED: Face area increased by ${increasePercentage.toInt()}%")
+                recordWarning() // Record statistics
                 
             } else if (isWarning && (currentTime - warningStartTime) > (warningTime * 1000)) {
                 // Warning period elapsed, activate protection
@@ -274,6 +278,7 @@ class ProtectionService : Service(), FaceDetectionManager.FaceDetectionCallback 
                 showOverlay()
                 updateNotification("Screen blocked - move back to comfortable distance!")
                 android.util.Log.d("ProtectionService", "SCREEN BLOCKED: Face too close for ${warningTime}s")
+                recordBlock() // Record statistics
             }
             
         } else if (!result.faceDetected || result.normalizedArea < exitThreshold) {
@@ -312,6 +317,9 @@ class ProtectionService : Service(), FaceDetectionManager.FaceDetectionCallback 
             updateNotification("Overlay permission required")
             return
         }
+        
+        // Haptic feedback - vibrate on warning
+        triggerHapticFeedback()
 
         try {
             overlayView = View(this).apply {
@@ -350,6 +358,96 @@ class ProtectionService : Service(), FaceDetectionManager.FaceDetectionCallback 
             overlayView = null
         }
     }
+    
+    private fun triggerHapticFeedback() {
+        try {
+            // Check if haptics are enabled in preferences
+            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val hapticsEnabled = prefs.getBoolean("flutter.haptics_enabled", true)
+            
+            if (!hapticsEnabled) return
+            
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vibratorManager.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // Strong warning vibration pattern
+                vibrator.vibrate(VibrationEffect.createWaveform(
+                    longArrayOf(0, 100, 50, 100), // delay, vibrate, pause, vibrate
+                    -1 // don't repeat
+                ))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(longArrayOf(0, 100, 50, 100), -1)
+            }
+        } catch (e: Exception) {
+            // Vibration not available
+        }
+    }
+    
+    private fun recordWarning() {
+        try {
+            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            
+            // Check and reset if new day
+            checkAndResetDailyStats()
+            
+            val currentToday = prefs.getInt("flutter.stats_today_warnings", 0)
+            val currentTotal = prefs.getInt("flutter.stats_total_warnings", 0)
+            
+            prefs.edit()
+                .putInt("flutter.stats_today_warnings", currentToday + 1)
+                .putInt("flutter.stats_total_warnings", currentTotal + 1)
+                .apply()
+            
+            android.util.Log.d("ProtectionService", "STATS: Recorded warning. Today: ${currentToday + 1}, Total: ${currentTotal + 1}")
+        } catch (e: Exception) {
+            android.util.Log.e("ProtectionService", "Failed to record warning: ${e.message}")
+        }
+    }
+    
+    private fun recordBlock() {
+        try {
+            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            
+            // Check and reset if new day
+            checkAndResetDailyStats()
+            
+            val currentToday = prefs.getInt("flutter.stats_today_blocks", 0)
+            val currentTotal = prefs.getInt("flutter.stats_total_blocks", 0)
+            
+            prefs.edit()
+                .putInt("flutter.stats_today_blocks", currentToday + 1)
+                .putInt("flutter.stats_total_blocks", currentTotal + 1)
+                .apply()
+            
+            android.util.Log.d("ProtectionService", "STATS: Recorded block. Today: ${currentToday + 1}, Total: ${currentTotal + 1}")
+        } catch (e: Exception) {
+            android.util.Log.e("ProtectionService", "Failed to record block: ${e.message}")
+        }
+    }
+    
+    private fun checkAndResetDailyStats() {
+        val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val lastDate = prefs.getString("flutter.stats_last_date", "") ?: ""
+        
+        if (lastDate != today) {
+            prefs.edit()
+                .putInt("flutter.stats_today_warnings", 0)
+                .putInt("flutter.stats_today_blocks", 0)
+                .putInt("flutter.stats_today_session_minutes", 0)
+                .putString("flutter.stats_last_date", today)
+                .apply()
+            android.util.Log.d("ProtectionService", "STATS: Reset daily stats for new day: $today")
+        }
+    }
+
 
     private fun updateNotification(text: String) {
         val stopIntent = Intent(this, ProtectionService::class.java).apply {

@@ -1,4 +1,9 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:screenshot/screenshot.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/statistics_service.dart';
 
 class StatisticsScreen extends StatefulWidget {
@@ -14,6 +19,9 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   List<DailyStats>? _weekHistory;
   int _safeDistanceScore = 100;
   bool _isLoading = true;
+  
+  // Screenshot controller for export
+  final _screenshotController = ScreenshotController();
 
   @override
   void initState() {
@@ -42,6 +50,32 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       setState(() => _isLoading = false);
     }
   }
+  
+  Future<void> _shareStats() async {
+    try {
+      // Capture screenshot
+      final Uint8List? image = await _screenshotController.capture();
+      if (image == null) return;
+      
+      // Save to temporary file
+      final directory = await getTemporaryDirectory();
+      final imagePath = '${directory.path}/keepme_away_stats.png';
+      final File imageFile = File(imagePath);
+      await imageFile.writeAsBytes(image);
+      
+      // Share the image
+      await Share.shareXFiles(
+        [XFile(imagePath)],
+        text: 'My KeepMe Away Stats - Safe Distance Score: $_safeDistanceScore 📱👀',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to share: $e')),
+        );
+      }
+    }
+  }
 
   Color _getScoreColor(int score) {
     if (score >= 80) return Colors.green;
@@ -67,6 +101,11 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
+            icon: const Icon(Icons.share),
+            tooltip: 'Share Stats',
+            onPressed: _shareStats,
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadStats,
           ),
@@ -74,11 +113,13 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadStats,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
+          : Screenshot(
+              controller: _screenshotController,
+              child: RefreshIndicator(
+                onRefresh: _loadStats,
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
                   // Safe Distance Score Card
                   Card(
                     elevation: 4,
@@ -330,7 +371,8 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                       ],
                     ),
                   ),
-                ],
+                  ],
+                ),
               ),
             ),
     );

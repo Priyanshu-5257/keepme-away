@@ -31,9 +31,10 @@
 
 ## Privacy first 🔒
 
-- 100% on‑device processing with Google ML Kit
+- 100% on‑device processing with open‑source models (MediaPipe BlazeFace)
 - No photos or video are stored
 - No data is transmitted; internet not required
+- No proprietary dependencies — fully FOSS‑compliant
 
 ## Get the app ⬇️
 
@@ -88,5 +89,5 @@ Issues and PRs are welcome. Ideas: improved UX, accessibility, localization, enh
 
 ## License 📄
 
-MIT — see `LICENSE`.
+MIT — see [LICENSE](LICENSE).
 

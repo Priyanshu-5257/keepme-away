@@ -1,0 +1,23 @@
+KeepMe Away uses your device's front camera to estimate how close your face is to the screen and warns you if you're sitting too close. On Android, it can dim or block the screen until you move back to a healthy distance.
+
+All processing happens entirely on your device — no images are saved, no data is uploaded, and no internet connection is required. Face detection uses a bundled open-source model (MediaPipe BlazeFace) that runs locally.
+
+Features:
+• On-device face proximity detection (privacy-first)
+• One-time calibration at your comfortable distance
+• Warning countdown, then protective overlay
+• Fine-tune sensitivity, thresholds, and warning time
+• Usage statistics tracking
+• Lightweight and battery-friendly
+• Works entirely offline
+
+Permissions:
+• Camera: measure face size on-device to infer distance
+• Display over other apps: show warning overlay when too close
+• Ignore battery optimizations (optional): improve reliability in background
+
+Why use it?
+• Reduce eye strain and fatigue
+• Encourage healthy screen habits for kids
+• Help students maintain good posture while studying
+• For heavy phone users who sit too close without noticing

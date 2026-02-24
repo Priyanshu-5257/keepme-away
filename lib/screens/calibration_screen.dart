@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:camera/camera.dart';
 import 'dart:async';
+import 'dart:ui' as ui;
 import '../services/face_detector.dart';
 import '../utils/prefs.dart';
+import '../widgets/face_overlay.dart';
 import 'home_screen.dart';
 
 class CalibrationScreen extends StatefulWidget {
@@ -22,12 +25,19 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   Timer? _calibrationTimer;
   int _countdown = 0;
   String _status = 'Position your face in the camera view at a comfortable distance';
+  
+  // Face overlay tracking
+  ui.Rect? _currentFaceRect;
+  bool _faceDetected = false;
+  int _lastFrameWidth = 320;
+  int _lastFrameHeight = 240;
 
   final FaceDetectorService _faceDetector = FaceDetectorService();
   StreamSubscription<FaceDetectionResult>? _detectionSubscription;
   
-  // Platform channel for Android ML Kit communication
-  static const platform = MethodChannel('com.example.screen_protector_app/face_detection');
+  // Platform channel for face detection communication
+  static const platform = MethodChannel('io.github.priyanshu5257.keepmeaway/face_detection');
+  bool _isImageStreamActive = false;
 
   @override
   void initState() {
@@ -89,18 +99,30 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
   void _setupDetectionListener() {
     _detectionSubscription = _faceDetector.detectionStream.listen((result) {
+      // Update face overlay even when not calibrating
+      setState(() {
+        _currentFaceRect = result.faceRect;
+        _faceDetected = result.faceDetected;
+        _lastFrameWidth = result.frameWidth;
+        _lastFrameHeight = result.frameHeight;
+      });
+      
       if (!_isCalibrating) return;
       
-      setState(() {
-        if (result.faceDetected && result.normalizedArea > 0) {
+      if (result.faceDetected && result.normalizedArea > 0) {
+        setState(() {
           _samples.add(result.normalizedArea);
           _status = 'Calibrating... Sample ${_samples.length}/15 (Area: ${result.normalizedArea.toStringAsFixed(4)})';
-          
+        });
+        
+        if (kDebugMode) {
           print('Calibration sample: ${result.normalizedArea} (${result.frameWidth}x${result.frameHeight})');
-        } else {
-          _status = 'Calibrating... Please ensure your face is visible';
         }
-      });
+      } else {
+        setState(() {
+          _status = 'Calibrating... Please ensure your face is visible';
+        });
+      }
     });
   }
 
@@ -110,7 +132,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     setState(() {
       _isCalibrating = true;
       _samples.clear();
-      _countdown = 5;
+      _countdown = 2;
       _status = 'Get ready! Calibration starts in $_countdown seconds';
     });
 
@@ -164,8 +186,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       });
       
     } catch (e) {
-      print('Error starting Android face detection for calibration: $e');
-      // Fallback to Flutter ML Kit if Android approach fails
+      if (kDebugMode) print('Error starting Android face detection for calibration: $e');
+      // Fallback to Flutter face detection if Android approach fails
       _startFlutterFaceDetection();
     }
   }
@@ -177,7 +199,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         final area = result['normalizedArea'] as double;
         if (area > 0) {
           _samples.add(area);
-          print('Calibration sample: $area (${_samples.length}/15)');
+          if (kDebugMode) print('Calibration sample: $area (${_samples.length}/15)');
           
           setState(() {
             _status = 'Calibrating... ${_samples.length}/15 samples collected\n'
@@ -186,28 +208,29 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         }
       }
     } catch (e) {
-      print('Error getting calibration sample: $e');
+      if (kDebugMode) print('Error getting calibration sample: $e');
     }
   }
 
   void _startFlutterFaceDetection() {
-    // Fallback: Start image stream for face detection using Flutter ML Kit
+    // Fallback: Start image stream for face detection using Flutter TFLite
     try {
       if (_controller != null && _controller!.value.isInitialized) {
         _controller!.startImageStream((image) {
-          print('Camera image received: ${image.width}x${image.height}');
+          if (kDebugMode) print('Camera image received: ${image.width}x${image.height}');
           _faceDetector.processImage(image);
         });
-        print('Image stream started successfully');
+        _isImageStreamActive = true;
+        if (kDebugMode) print('Image stream started successfully');
       } else {
-        print('Camera controller not ready for image stream');
+        if (kDebugMode) print('Camera controller not ready for image stream');
         setState(() {
           _status = 'Camera not ready. Please try again.';
         });
         return;
       }
     } catch (e) {
-      print('Error starting image stream: $e');
+      if (kDebugMode) print('Error starting image stream: $e');
       setState(() {
         _status = 'Error starting camera stream: $e';
       });
@@ -218,11 +241,14 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   void _stopCalibration() {
     if (!_isCalibrating) return;
 
-    try {
-      _controller?.stopImageStream();
-      print('Image stream stopped');
-    } catch (e) {
-      print('Error stopping image stream: $e');
+    if (_isImageStreamActive) {
+      try {
+        _controller?.stopImageStream();
+        _isImageStreamActive = false;
+        if (kDebugMode) print('Image stream stopped');
+      } catch (e) {
+        if (kDebugMode) print('Error stopping image stream: $e');
+      }
     }
     
     setState(() {
@@ -270,11 +296,13 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           'Samples: ${_samples.length}';
     });
 
-    print('Calibration complete:');
-    print('  Baseline (median): $baseline');
-    print('  Average: $avgSample');
-    print('  Min: $minSample, Max: $maxSample');
-    print('  Samples: $_samples');
+    if (kDebugMode) {
+      print('Calibration complete:');
+      print('  Baseline (median): $baseline');
+      print('  Average: $avgSample');
+      print('  Min: $minSample, Max: $maxSample');
+      print('  Samples: $_samples');
+    }
 
     // Save calibration data
     PrefsHelper.setBaselineArea(baseline);
@@ -289,10 +317,13 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
 
   Future<void> _disposeCameraAndNavigate() async {
     // Stop image stream first to prevent further processing
-    try {
-      await _controller?.stopImageStream();
-    } catch (e) {
-      print('Error stopping image stream: $e');
+    if (_isImageStreamActive) {
+      try {
+        await _controller?.stopImageStream();
+        _isImageStreamActive = false;
+      } catch (e) {
+        if (kDebugMode) print('Error stopping image stream: $e');
+      }
     }
     
     // Stop face detector
@@ -309,7 +340,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     try {
       await _controller?.dispose();
     } catch (e) {
-      print('Error disposing camera controller: $e');
+      if (kDebugMode) print('Error disposing camera controller: $e');
     }
     
     if (mounted) {
@@ -351,12 +382,6 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       appBar: AppBar(
         title: const Text('Calibration'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          TextButton(
-            onPressed: _skipCalibration,
-            child: const Text('Skip (Demo)'),
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -369,18 +394,33 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
               child: _isCameraInitialized && 
                      _controller != null && 
                      _controller!.value.isInitialized
-                  ? ClipRect(
-                      child: OverflowBox(
-                        alignment: Alignment.center,
-                        child: FittedBox(
-                          fit: BoxFit.cover,
-                          child: SizedBox(
-                            width: _controller!.value.previewSize?.height ?? 1,
-                            height: _controller!.value.previewSize?.width ?? 1,
-                            child: CameraPreview(_controller!),
+                  ? Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.center,
+                            child: FittedBox(
+                              fit: BoxFit.cover,
+                              child: SizedBox(
+                                width: _controller!.value.previewSize?.height ?? 1,
+                                height: _controller!.value.previewSize?.width ?? 1,
+                                child: CameraPreview(_controller!),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                        // Face Overlay
+                        FaceOverlay(
+                          faceRect: _currentFaceRect,
+                          imageSize: Size(
+                            _lastFrameWidth.toDouble(),
+                            _lastFrameHeight.toDouble(),
+                          ),
+                          isFront: true,
+                          faceDetected: _faceDetected,
+                        ),
+                      ],
                     )
                   : const Center(
                       child: CircularProgressIndicator(),

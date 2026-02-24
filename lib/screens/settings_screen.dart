@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/prefs.dart';
+import '../main.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -18,6 +19,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _scheduledEnabled;
   late int _scheduleStartHour;
   late int _scheduleEndHour;
+  
+  // Feedback settings
+  late bool _hapticsEnabled;
+  late bool _soundEnabled;
+  late bool _breakReminderEnabled;
+  late int _breakReminderInterval;
 
   @override
   void initState() {
@@ -33,6 +40,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _scheduledEnabled = PrefsHelper.getScheduledEnabled();
     _scheduleStartHour = PrefsHelper.getScheduleStartHour();
     _scheduleEndHour = PrefsHelper.getScheduleEndHour();
+    _hapticsEnabled = PrefsHelper.getHapticsEnabled();
+    _soundEnabled = PrefsHelper.getSoundEnabled();
+    _breakReminderEnabled = PrefsHelper.getBreakReminderEnabled();
+    _breakReminderInterval = PrefsHelper.getBreakReminderInterval();
   }
 
   Future<void> _saveSettings() async {
@@ -43,6 +54,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await PrefsHelper.setScheduledEnabled(_scheduledEnabled);
     await PrefsHelper.setScheduleStartHour(_scheduleStartHour);
     await PrefsHelper.setScheduleEndHour(_scheduleEndHour);
+    await PrefsHelper.setHapticsEnabled(_hapticsEnabled);
+    await PrefsHelper.setSoundEnabled(_soundEnabled);
+    await PrefsHelper.setBreakReminderEnabled(_breakReminderEnabled);
+    await PrefsHelper.setBreakReminderInterval(_breakReminderInterval);
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -85,6 +100,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
+          // Appearance Card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.palette, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Appearance',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      ScreenProtectorApp.getThemeMode(context) == ThemeMode.dark
+                          ? Icons.dark_mode
+                          : ScreenProtectorApp.getThemeMode(context) == ThemeMode.light
+                              ? Icons.light_mode
+                              : Icons.brightness_auto,
+                    ),
+                    title: const Text('Theme'),
+                    subtitle: const Text('Choose your preferred appearance'),
+                    trailing: DropdownButton<ThemeMode>(
+                      value: ScreenProtectorApp.getThemeMode(context),
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
+                        DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                        DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                      ],
+                      onChanged: (mode) {
+                        if (mode != null) {
+                          ScreenProtectorApp.setThemeMode(context, mode);
+                          setState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -313,6 +380,89 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           
+          const SizedBox(height: 16),
+          
+          // Feedback & Alerts Card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.notifications_active, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Feedback & Alerts',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  SwitchListTile(
+                    title: const Text('Haptic Feedback'),
+                    subtitle: const Text('Vibrate on warnings'),
+                    secondary: const Icon(Icons.vibration),
+                    value: _hapticsEnabled,
+                    onChanged: (value) {
+                      setState(() => _hapticsEnabled = value);
+                    },
+                  ),
+                  
+                  SwitchListTile(
+                    title: const Text('Sound Alerts'),
+                    subtitle: const Text('Play sound on warnings'),
+                    secondary: const Icon(Icons.volume_up),
+                    value: _soundEnabled,
+                    onChanged: (value) {
+                      setState(() => _soundEnabled = value);
+                    },
+                  ),
+                  
+                  const Divider(),
+                  
+                  SwitchListTile(
+                    title: const Text('Break Reminders'),
+                    subtitle: Text(
+                      _breakReminderEnabled
+                          ? 'Remind every $_breakReminderInterval minutes'
+                          : 'Disabled',
+                    ),
+                    secondary: const Icon(Icons.timer),
+                    value: _breakReminderEnabled,
+                    onChanged: (value) {
+                      setState(() => _breakReminderEnabled = value);
+                    },
+                  ),
+                  
+                  if (_breakReminderEnabled) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Reminder interval: $_breakReminderInterval minutes'),
+                          Slider(
+                            value: _breakReminderInterval.toDouble(),
+                            min: 10,
+                            max: 60,
+                            divisions: 10,
+                            label: '$_breakReminderInterval min',
+                            onChanged: (value) {
+                              setState(() => _breakReminderInterval = value.toInt());
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          
           const SizedBox(height: 24),
           
           Row(
@@ -333,6 +483,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
           
+          const SizedBox(height: 16),
+          
+          // About Card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'About',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.apps),
+                    title: Text('KeepMe Away'),
+                    subtitle: Text('Version 1.0.0'),
+                  ),
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.gavel),
+                    title: Text('License'),
+                    subtitle: Text('MIT License'),
+                  ),
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.code),
+                    title: Text('Source Code'),
+                    subtitle: Text('github.com/Priyanshu-5257/keepme-away'),
+                  ),
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.psychology),
+                    title: Text('Face Detection'),
+                    subtitle: Text('MediaPipe BlazeFace (Apache 2.0)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
           
           Container(
