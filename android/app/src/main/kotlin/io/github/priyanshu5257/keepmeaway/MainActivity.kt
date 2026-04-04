@@ -1,5 +1,6 @@
 package io.github.priyanshu5257.keepmeaway
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -12,6 +13,7 @@ class MainActivity : FlutterActivity(), FaceDetectionManager.FaceDetectionCallba
     private val CHANNEL = "protection_service"
     private val FACE_DETECTION_CHANNEL = "io.github.priyanshu5257.keepmeaway/face_detection"
     private val OVERLAY_PERMISSION_REQUEST_CODE = 1001
+    private var overlayPermissionAttempts = 0
     
     // Calibration face detection
     private var calibrationFaceDetector: FaceDetectionManager? = null
@@ -42,6 +44,12 @@ class MainActivity : FlutterActivity(), FaceDetectionManager.FaceDetectionCallba
                 }
                 "requestOverlayPermission" -> {
                     requestOverlayPermission(result)
+                }
+                "openAppSettings" -> {
+                    openAppSettings(result)
+                }
+                "getOverlayPermissionStatus" -> {
+                    getOverlayPermissionStatus(result)
                 }
                 "requestIgnoreBatteryOptimizations" -> {
                     requestIgnoreBatteryOptimizations(result)
@@ -122,14 +130,62 @@ class MainActivity : FlutterActivity(), FaceDetectionManager.FaceDetectionCallba
 
     private fun requestOverlayPermission(result: MethodChannel.Result) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
-            result.success(true)
+            overlayPermissionAttempts++
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
+                result.success(mapOf(
+                    "opened" to true,
+                    "attempts" to overlayPermissionAttempts
+                ))
+            } catch (e: ActivityNotFoundException) {
+                result.success(mapOf(
+                    "opened" to false,
+                    "error" to "activity_not_found",
+                    "attempts" to overlayPermissionAttempts
+                ))
+            } catch (e: Exception) {
+                result.success(mapOf(
+                    "opened" to false,
+                    "error" to e.message,
+                    "attempts" to overlayPermissionAttempts
+                ))
+            }
         } else {
+            result.success(mapOf(
+                "opened" to false,
+                "alreadyGranted" to true,
+                "attempts" to overlayPermissionAttempts
+            ))
+        }
+    }
+
+    private fun openAppSettings(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
             result.success(true)
+        } catch (e: Exception) {
+            result.error("APP_SETTINGS_ERROR", e.message, null)
+        }
+    }
+
+    private fun getOverlayPermissionStatus(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            result.success(mapOf(
+                "granted" to Settings.canDrawOverlays(this),
+                "attempts" to overlayPermissionAttempts
+            ))
+        } else {
+            result.success(mapOf(
+                "granted" to true,
+                "attempts" to 0
+            ))
         }
     }
 

@@ -18,6 +18,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
   bool _cameraPermissionGranted = false;
   bool _overlayPermissionGranted = false;
   bool _isCheckingPermissions = true;
+  int _overlayPermissionAttempts = 0;
+  bool _showRestrictedSettingsHelp = false;
 
   @override
   void initState() {
@@ -77,8 +79,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
   Future<bool> _checkOverlayPermission() async {
     try {
       const platform = MethodChannel('protection_service');
-      final result = await platform.invokeMethod('checkOverlayPermission');
-      return result == true;
+      final result = await platform.invokeMethod('getOverlayPermissionStatus');
+      if (result is Map) {
+        _overlayPermissionAttempts = (result['attempts'] as int?) ?? 0;
+        return result['granted'] == true;
+      }
+      final boolResult = await platform.invokeMethod('checkOverlayPermission');
+      return boolResult == true;
     } catch (e) {
       if (kDebugMode) print('Error checking overlay permission: $e');
       return false;
@@ -95,13 +102,31 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
   Future<void> _requestOverlayPermission() async {
     try {
       const platform = MethodChannel('protection_service');
-      await platform.invokeMethod('requestOverlayPermission');
-      // Check again after user returns from settings
+      final result = await platform.invokeMethod('requestOverlayPermission');
+      
+      if (result is Map) {
+        _overlayPermissionAttempts = (result['attempts'] as int?) ?? 0;
+      }
+      
       await Future.delayed(const Duration(seconds: 1));
       _overlayPermissionGranted = await _checkOverlayPermission();
-      setState(() {});
+      
+      if (!_overlayPermissionGranted && _overlayPermissionAttempts >= 2) {
+        setState(() => _showRestrictedSettingsHelp = true);
+      } else {
+        setState(() {});
+      }
     } catch (e) {
       if (kDebugMode) print('Error requesting overlay permission: $e');
+    }
+  }
+
+  Future<void> _openAppSettings() async {
+    try {
+      const platform = MethodChannel('protection_service');
+      await platform.invokeMethod('openAppSettings');
+    } catch (e) {
+      if (kDebugMode) print('Error opening app settings: $e');
     }
   }
 
@@ -167,13 +192,63 @@ class _OnboardingScreenState extends State<OnboardingScreen> with WidgetsBinding
             ),
             
             // Overlay Permission (Android only)
-            if (Platform.isAndroid)
+            if (Platform.isAndroid) ...[
               _buildPermissionTile(
                 title: 'Display over other apps',
                 description: 'Required to show protection overlay',
                 isGranted: _overlayPermissionGranted,
                 onRequest: _requestOverlayPermission,
               ),
+              
+              // GrapheneOS / Restricted Settings Help
+              if (_showRestrictedSettingsHelp && !_overlayPermissionGranted)
+                Card(
+                  color: Colors.orange.shade50,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.orange.shade700),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Permission Blocked?',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange.shade900,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'On GrapheneOS and some security-focused ROMs, you need to enable "Allow restricted settings" first:',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          '1. Open App Info (button below)\n'
+                          '2. Tap the 3-dot menu (top right)\n'
+                          '3. Select "Allow restricted settings"\n'
+                          '4. Return here and try again',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _openAppSettings,
+                            icon: const Icon(Icons.settings),
+                            label: const Text('Open App Info'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
             
             const SizedBox(height: 32),
             
