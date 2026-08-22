@@ -3,17 +3,39 @@ import 'package:shared_preferences/shared_preferences.dart';
 class PrefsHelper {
   static SharedPreferences? _prefs;
 
+  /// 0 = face-box area (legacy), 1 = inter-ocular distance.
+  static const int iodMetricVersion = 1;
+
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+    await _migrateToIodIfNeeded();
   }
 
-  // Calibration settings
-  static Future<void> setBaselineArea(double value) async {
-    await _prefs?.setDouble('baseline_area', value);
+  /// Old installs were calibrated on bounding-box area. IOD is a different
+  /// signal, so force a fresh calibration and IOD-scaled defaults.
+  static Future<void> _migrateToIodIfNeeded() async {
+    if (_prefs?.getBool('iod_migrated') == true) return;
+    final version = _prefs?.getInt('detection_metric') ?? 0;
+    if (version < iodMetricVersion) {
+      await _prefs?.remove('baseline_area');
+      await _prefs?.remove('baseline_iod');
+      await _prefs?.setBool('is_calibrated', false);
+      await _prefs?.setBool('is_protection_active', false);
+      await setThresholdFactor(1.4);
+      await setHysteresisGap(0.12);
+    }
+    await _prefs?.setBool('iod_migrated', true);
   }
 
-  static double getBaselineArea() {
-    return _prefs?.getDouble('baseline_area') ?? 0.0;
+  static Future<void> setBaselineIod(double value) async {
+    await _prefs?.setDouble('baseline_iod', value);
+    await _prefs?.setInt('detection_metric', iodMetricVersion);
+  }
+
+  static double getBaselineIod() {
+    return _prefs?.getDouble('baseline_iod') ??
+        _prefs?.getDouble('baseline_area') ??
+        0.0;
   }
 
   static Future<void> setThresholdFactor(double value) async {
@@ -21,7 +43,7 @@ class PrefsHelper {
   }
 
   static double getThresholdFactor() {
-    return _prefs?.getDouble('threshold_factor') ?? 2.0;  // Improved default: trigger when face doubles in size
+    return _prefs?.getDouble('threshold_factor') ?? 1.4;
   }
 
   static Future<void> setHysteresisGap(double value) async {
@@ -29,7 +51,7 @@ class PrefsHelper {
   }
 
   static double getHysteresisGap() {
-    return _prefs?.getDouble('hysteresis_gap') ?? 0.3;  // Improved default: exit at 1.7x baseline
+    return _prefs?.getDouble('hysteresis_gap') ?? 0.12;
   }
 
   static Future<void> setWarningTime(int value) async {
@@ -48,13 +70,13 @@ class PrefsHelper {
     return _prefs?.getDouble('detection_threshold') ?? 0.5;
   }
 
-  // App state
   static Future<void> setIsCalibrated(bool value) async {
     await _prefs?.setBool('is_calibrated', value);
   }
 
   static bool getIsCalibrated() {
-    return _prefs?.getBool('is_calibrated') ?? false;
+    if (!(_prefs?.getBool('is_calibrated') ?? false)) return false;
+    return (_prefs?.getInt('detection_metric') ?? 0) >= iodMetricVersion;
   }
 
   static Future<void> setIsProtectionActive(bool value) async {
@@ -65,87 +87,34 @@ class PrefsHelper {
     return _prefs?.getBool('is_protection_active') ?? false;
   }
 
-  // Clear all calibration data
   static Future<void> clearCalibration() async {
+    await _prefs?.remove('baseline_iod');
     await _prefs?.remove('baseline_area');
+    await _prefs?.remove('detection_metric');
     await _prefs?.setBool('is_calibrated', false);
     await _prefs?.setBool('is_protection_active', false);
   }
 
-  // Scheduled protection settings
-  static Future<void> setScheduledEnabled(bool value) async {
-    await _prefs?.setBool('scheduled_enabled', value);
-  }
-
-  static bool getScheduledEnabled() {
-    return _prefs?.getBool('scheduled_enabled') ?? false;
-  }
-
-  static Future<void> setScheduleStartHour(int hour) async {
-    await _prefs?.setInt('schedule_start_hour', hour);
-  }
-
-  static int getScheduleStartHour() {
-    return _prefs?.getInt('schedule_start_hour') ?? 9; // Default 9 AM
-  }
-
-  static Future<void> setScheduleEndHour(int hour) async {
-    await _prefs?.setInt('schedule_end_hour', hour);
-  }
-
-  static int getScheduleEndHour() {
-    return _prefs?.getInt('schedule_end_hour') ?? 21; // Default 9 PM
-  }
-
-  /// Check if current time is within scheduled protection hours
-  static bool isWithinSchedule() {
-    if (!getScheduledEnabled()) return false;
-    
-    final now = DateTime.now();
-    final currentHour = now.hour;
-    final startHour = getScheduleStartHour();
-    final endHour = getScheduleEndHour();
-    
-    if (startHour <= endHour) {
-      // Normal range (e.g., 9 AM - 9 PM)
-      return currentHour >= startHour && currentHour < endHour;
-    } else {
-      // Overnight range (e.g., 10 PM - 6 AM)
-      return currentHour >= startHour || currentHour < endHour;
-    }
-  }
-
-  // Feedback settings
   static Future<void> setHapticsEnabled(bool value) async {
     await _prefs?.setBool('haptics_enabled', value);
   }
 
   static bool getHapticsEnabled() {
-    return _prefs?.getBool('haptics_enabled') ?? true; // Enabled by default
+    return _prefs?.getBool('haptics_enabled') ?? true;
   }
 
-  static Future<void> setSoundEnabled(bool value) async {
-    await _prefs?.setBool('sound_enabled', value);
+  /// How much closer than calibrated distance this factor represents.
+  /// distance ∝ 1/IOD, so factor 1.4 ≈ 29% closer.
+  static int percentCloser(double factor) {
+    if (factor <= 1) return 0;
+    return ((1 - 1 / factor) * 100).round();
   }
+}
 
-  static bool getSoundEnabled() {
-    return _prefs?.getBool('sound_enabled') ?? false; // Disabled by default
-  }
-
-  // Break reminder settings
-  static Future<void> setBreakReminderEnabled(bool value) async {
-    await _prefs?.setBool('break_reminder_enabled', value);
-  }
-
-  static bool getBreakReminderEnabled() {
-    return _prefs?.getBool('break_reminder_enabled') ?? false;
-  }
-
-  static Future<void> setBreakReminderInterval(int minutes) async {
-    await _prefs?.setInt('break_reminder_interval', minutes);
-  }
-
-  static int getBreakReminderInterval() {
-    return _prefs?.getInt('break_reminder_interval') ?? 20; // Default 20 minutes
-  }
+double median(List<double> samples) {
+  if (samples.isEmpty) return 0.0;
+  final sorted = List<double>.from(samples)..sort();
+  final middle = sorted.length ~/ 2;
+  if (sorted.length.isOdd) return sorted[middle];
+  return (sorted[middle - 1] + sorted[middle]) / 2.0;
 }

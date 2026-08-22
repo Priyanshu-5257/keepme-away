@@ -52,19 +52,19 @@ class StatisticsService {
   Future<void> _saveDailyToHistory(String date) async {
     final historyJson = _prefs?.getString(_keyDailyHistory) ?? '[]';
     final history = List<Map<String, dynamic>>.from(jsonDecode(historyJson));
-    
+    if (history.isNotEmpty && history.last['date'] == date) return;
+
     history.add({
       'date': date,
       'warnings': _prefs?.getInt(_keyTodayWarnings) ?? 0,
       'blocks': _prefs?.getInt(_keyTodayBlocks) ?? 0,
       'sessionMinutes': _prefs?.getInt(_keyTodaySessionMinutes) ?? 0,
     });
-    
-    // Keep only last 30 days
-    if (history.length > 30) {
+
+    while (history.length > 30) {
       history.removeAt(0);
     }
-    
+
     await _prefs?.setString(_keyDailyHistory, jsonEncode(history));
   }
   
@@ -122,38 +122,45 @@ class StatisticsService {
     );
   }
   
-  /// Get weekly history (last 7 days)
+  /// Last 7 calendar days, including today. Missing days are zeros.
   Future<List<DailyStats>> getWeekHistory() async {
     await _checkAndResetDailyStats();
-    
+
     final historyJson = _prefs?.getString(_keyDailyHistory) ?? '[]';
     final history = List<Map<String, dynamic>>.from(jsonDecode(historyJson));
-    
-    // Get last 7 days
-    final last7 = history.length > 7 ? history.sublist(history.length - 7) : history;
-    
-    return last7.map((item) => DailyStats(
-      date: item['date'] as String,
-      warnings: item['warnings'] as int,
-      blocks: item['blocks'] as int,
-      sessionMinutes: item['sessionMinutes'] as int,
-    )).toList();
-  }
-  
-  /// Calculate "safe distance score" (0-100)
-  /// Higher is better - fewer warnings per session time
-  Future<int> getSafeDistanceScore() async {
+    final byDate = <String, DailyStats>{};
+    for (final item in history) {
+      final stats = DailyStats(
+        date: item['date'] as String,
+        warnings: item['warnings'] as int,
+        blocks: item['blocks'] as int,
+        sessionMinutes: item['sessionMinutes'] as int,
+      );
+      byDate[stats.date] = stats;
+    }
+
     final today = await getTodayStats();
-    
-    if (today.sessionMinutes == 0) return 100;
-    
-    // Calculate warnings per hour
-    final warningsPerHour = today.warnings / (today.sessionMinutes / 60.0);
-    
-    // Score: 100 = 0 warnings/hr, 0 = 10+ warnings/hr
-    final score = (100 - (warningsPerHour * 10)).clamp(0, 100);
-    
-    return score.round();
+    byDate[today.date] = today;
+
+    final now = DateTime.now();
+    return List.generate(7, (i) {
+      final day = DateTime(now.year, now.month, now.day).subtract(Duration(days: 6 - i));
+      final key =
+          '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      return byDate[key] ??
+          DailyStats(date: key, warnings: 0, blocks: 0, sessionMinutes: 0);
+    });
+  }
+
+  /// Higher is better — fewer warnings per protected hour over the last week.
+  Future<int> getSafeDistanceScore() async {
+    final week = await getWeekHistory();
+    final minutes = week.fold<int>(0, (sum, day) => sum + day.sessionMinutes);
+    final warnings = week.fold<int>(0, (sum, day) => sum + day.warnings);
+    if (minutes < 5) return 100;
+
+    final warningsPerHour = warnings / (minutes / 60.0);
+    return (100 - (warningsPerHour * 10)).clamp(0, 100).round();
   }
 }
 

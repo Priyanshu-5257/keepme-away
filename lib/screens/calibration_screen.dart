@@ -1,13 +1,16 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:camera/camera.dart';
 import 'dart:async';
-import 'dart:ui' as ui;
-import '../services/face_detector.dart';
+import '../services/protection_service.dart';
 import '../utils/prefs.dart';
+import '../utils/theme_provider.dart';
+import '../widgets/app_ui.dart';
 import '../widgets/face_overlay.dart';
 import 'home_screen.dart';
+
+enum _CalPhase { preview, countdown, sampling, success, failed }
 
 class CalibrationScreen extends StatefulWidget {
   const CalibrationScreen({super.key});
@@ -17,496 +20,371 @@ class CalibrationScreen extends StatefulWidget {
 }
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
-  CameraController? _controller;
-  List<CameraDescription>? _cameras;
-  bool _isCameraInitialized = false;
-  bool _isCalibrating = false;
-  List<double> _samples = [];
-  Timer? _calibrationTimer;
-  int _countdown = 0;
-  String _status = 'Position your face in the camera view at a comfortable distance';
-  
-  // Face overlay tracking
-  ui.Rect? _currentFaceRect;
-  bool _faceDetected = false;
-  int _lastFrameWidth = 320;
-  int _lastFrameHeight = 240;
+  static const _channel =
+      MethodChannel('io.github.priyanshu5257.keepmeaway/face_detection');
+  static const _targetSamples = 15;
 
-  final FaceDetectorService _faceDetector = FaceDetectorService();
-  StreamSubscription<FaceDetectionResult>? _detectionSubscription;
-  
-  // Platform channel for face detection communication
-  static const platform = MethodChannel('io.github.priyanshu5257.keepmeaway/face_detection');
-  bool _isImageStreamActive = false;
+  CameraController? _controller;
+  bool _cameraReady = false;
+  _CalPhase _phase = _CalPhase.preview;
+  String _status = 'Sit at a comfortable distance and align your face.';
+  final List<double> _samples = [];
+  int _countdown = 3;
+  Timer? _timer;
+  bool _faceDetected = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
-    _faceDetector.initialize();
-    _setupDetectionListener();
+    ProtectionService.stop();
+    _openPreview();
   }
 
   @override
   void dispose() {
-    _calibrationTimer?.cancel();
-    _detectionSubscription?.cancel();
+    _timer?.cancel();
     _controller?.dispose();
-    _faceDetector.dispose();
+    _stopNative();
     super.dispose();
   }
 
-  Future<void> _initializeCamera() async {
+  Future<void> _openPreview() async {
     try {
-      _cameras = await availableCameras();
-      if (_cameras == null || _cameras!.isEmpty) {
-        setState(() => _status = 'No cameras available');
-        return;
-      }
-
-      // Find front camera
-      CameraDescription? frontCamera;
-      for (final camera in _cameras!) {
+      final cameras = await availableCameras();
+      CameraDescription? front;
+      for (final camera in cameras) {
         if (camera.lensDirection == CameraLensDirection.front) {
-          frontCamera = camera;
+          front = camera;
           break;
         }
       }
-
-      if (frontCamera == null) {
-        setState(() => _status = 'Front camera not available');
+      front ??= cameras.isEmpty ? null : cameras.first;
+      if (front == null) {
+        if (!mounted) return;
+        setState(() {
+          _status = 'No camera available.';
+          _phase = _CalPhase.failed;
+        });
         return;
       }
-
-      _controller = CameraController(
-        frontCamera,
-        ResolutionPreset.low, // Use low resolution for better battery (320x240 is enough for face detection)
+      final controller = CameraController(
+        front,
+        ResolutionPreset.medium,
         enableAudio: false,
       );
-
-      await _controller!.initialize();
-      
-      if (mounted) {
-        setState(() {
-          _isCameraInitialized = true;
-          _status = 'Camera ready. Position your face comfortably and tap "Start Calibration"';
-        });
-      }
-    } catch (e) {
-      setState(() => _status = 'Error initializing camera: $e');
-    }
-  }
-
-  void _setupDetectionListener() {
-    _detectionSubscription = _faceDetector.detectionStream.listen((result) {
-      // Update face overlay even when not calibrating
-      setState(() {
-        _currentFaceRect = result.faceRect;
-        _faceDetected = result.faceDetected;
-        _lastFrameWidth = result.frameWidth;
-        _lastFrameHeight = result.frameHeight;
-      });
-      
-      if (!_isCalibrating) return;
-      
-      if (result.faceDetected && result.normalizedArea > 0) {
-        setState(() {
-          _samples.add(result.normalizedArea);
-          _status = 'Calibrating... Sample ${_samples.length}/15 (Area: ${result.normalizedArea.toStringAsFixed(4)})';
-        });
-        
-        if (kDebugMode) {
-          print('Calibration sample: ${result.normalizedArea} (${result.frameWidth}x${result.frameHeight})');
-        }
-      } else {
-        setState(() {
-          _status = 'Calibrating... Please ensure your face is visible';
-        });
-      }
-    });
-  }
-
-  void _startCalibration() {
-    if (!_isCameraInitialized || _isCalibrating) return;
-
-    setState(() {
-      _isCalibrating = true;
-      _samples.clear();
-      _countdown = 2;
-      _status = 'Get ready! Calibration starts in $_countdown seconds';
-    });
-
-    // Countdown timer
-    _calibrationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _countdown--;
-        if (_countdown > 0) {
-          _status = 'Get ready! Calibration starts in $_countdown seconds';
-        } else {
-          _status = 'Calibrating... Stay still and look at the camera';
-          timer.cancel();
-          _startSampling();
-        }
-      });
-    });
-  }
-
-  void _startSampling() {
-    // Use Android ML Kit for calibration - same as protection service
-    _startAndroidFaceDetectionForCalibration();
-    
-    // Stop after 10 seconds or when we have enough samples
-    Timer(const Duration(seconds: 10), () {
-      _stopCalibration();
-    });
-
-    // Also check periodically if we have enough samples
-    Timer.periodic(const Duration(milliseconds: 500), (timer) {
-      if (_samples.length >= 15) {
-        timer.cancel();
-        _stopCalibration();
-      }
-    });
-  }
-
-  void _startAndroidFaceDetectionForCalibration() async {
-    try {
-      // Start the Android face detection service temporarily for calibration
-      await platform.invokeMethod('startCalibrationMode');
-      
-      // Listen for face detection results from Android
-      Timer.periodic(const Duration(milliseconds: 200), (timer) {
-        if (!_isCalibrating) {
-          timer.cancel();
-          platform.invokeMethod('stopCalibrationMode');
-          return;
-        }
-        
-        _getCalibrationSample();
-      });
-      
-    } catch (e) {
-      if (kDebugMode) print('Error starting Android face detection for calibration: $e');
-      // Fallback to Flutter face detection if Android approach fails
-      _startFlutterFaceDetection();
-    }
-  }
-
-  void _getCalibrationSample() async {
-    try {
-      final result = await platform.invokeMethod('getCalibrationSample');
-      if (result != null && result['faceDetected'] == true) {
-        final area = result['normalizedArea'] as double;
-        if (area > 0) {
-          _samples.add(area);
-          if (kDebugMode) print('Calibration sample: $area (${_samples.length}/15)');
-          
-          setState(() {
-            _status = 'Calibrating... ${_samples.length}/15 samples collected\n'
-                'Current area: ${area.toStringAsFixed(4)}';
-          });
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) print('Error getting calibration sample: $e');
-    }
-  }
-
-  void _startFlutterFaceDetection() {
-    // Fallback: Start image stream for face detection using Flutter TFLite
-    try {
-      if (_controller != null && _controller!.value.isInitialized) {
-        _controller!.startImageStream((image) {
-          if (kDebugMode) print('Camera image received: ${image.width}x${image.height}');
-          _faceDetector.processImage(image);
-        });
-        _isImageStreamActive = true;
-        if (kDebugMode) print('Image stream started successfully');
-      } else {
-        if (kDebugMode) print('Camera controller not ready for image stream');
-        setState(() {
-          _status = 'Camera not ready. Please try again.';
-        });
+      await controller.initialize();
+      if (!mounted) {
+        await controller.dispose();
         return;
       }
-    } catch (e) {
-      if (kDebugMode) print('Error starting image stream: $e');
       setState(() {
-        _status = 'Error starting camera stream: $e';
+        _controller = controller;
+        _cameraReady = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = 'Could not open camera.';
+        _phase = _CalPhase.failed;
+      });
+      if (kDebugMode) print('Camera init: $e');
+    }
+  }
+
+  Future<void> _releasePreview() async {
+    final controller = _controller;
+    _controller = null;
+    _cameraReady = false;
+    try {
+      await controller?.dispose();
+    } catch (_) {}
+  }
+
+  Future<void> _stopNative() async {
+    try {
+      await _channel.invokeMethod('stopCalibrationMode');
+    } catch (_) {}
+  }
+
+  void _begin() {
+    if (!_cameraReady || _phase != _CalPhase.preview) return;
+    setState(() {
+      _phase = _CalPhase.countdown;
+      _countdown = 3;
+      _status = 'Hold still…';
+    });
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_countdown <= 1) {
+        t.cancel();
+        _startSampling();
+      } else {
+        setState(() => _countdown--);
+      }
+    });
+  }
+
+  Future<void> _startSampling() async {
+    setState(() {
+      _phase = _CalPhase.sampling;
+      _samples.clear();
+      _status = 'Look at the camera. Keep your usual viewing distance.';
+    });
+    await _releasePreview();
+    await Future.delayed(const Duration(milliseconds: 350));
+    try {
+      await _channel.invokeMethod('startCalibrationMode');
+    } catch (e) {
+      setState(() {
+        _phase = _CalPhase.failed;
+        _status = 'Could not start face detection. Try again.';
       });
       return;
     }
-  }
 
-  void _stopCalibration() {
-    if (!_isCalibrating) return;
-
-    if (_isImageStreamActive) {
-      try {
-        _controller?.stopImageStream();
-        _isImageStreamActive = false;
-        if (kDebugMode) print('Image stream stopped');
-      } catch (e) {
-        if (kDebugMode) print('Error stopping image stream: $e');
+    _timer?.cancel();
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    _timer = Timer.periodic(const Duration(milliseconds: 180), (t) async {
+      if (!mounted || _phase != _CalPhase.sampling) {
+        t.cancel();
+        return;
       }
-    }
-    
-    setState(() {
-      _isCalibrating = false;
+      if (_samples.length >= _targetSamples || DateTime.now().isAfter(deadline)) {
+        t.cancel();
+        await _finishSampling();
+        return;
+      }
+      await _pullSample();
     });
+  }
 
-    if (_samples.isNotEmpty) {
-      _processCalibrationResults();
-    } else {
-      setState(() {
-        _status = 'Calibration failed. No face detected. Please try again.';
-      });
+  Future<void> _pullSample() async {
+    try {
+      final result = await _channel.invokeMethod('getCalibrationSample');
+      if (result is! Map) return;
+      final detected = result['faceDetected'] == true;
+      final iod = (result['iod'] as num?)?.toDouble() ?? 0;
+      if (!mounted) return;
+      setState(() => _faceDetected = detected);
+      if (detected && iod > 0.02 && iod < 0.55) {
+        _samples.add(iod);
+      }
+    } catch (e) {
+      if (kDebugMode) print('Sample: $e');
     }
   }
 
-  void _processCalibrationResults() async {
+  Future<void> _finishSampling() async {
+    await _stopNative();
     if (_samples.length < 5) {
       setState(() {
-        _status = 'Not enough samples collected. Please try again.';
+        _phase = _CalPhase.failed;
+        _status = 'We couldn’t see both eyes clearly. Sit facing the camera and try again.';
       });
       return;
     }
 
-    // Calculate baseline using median for robustness
-    final baseline = FaceDetectorService.calculateMedian(_samples);
-    
-    // Validate baseline - should be reasonable for face detection
-    if (baseline < 0.005 || baseline > 0.3) {
+    final baseline = median(_samples);
+    if (baseline < 0.03 || baseline > 0.45) {
       setState(() {
-        _status = 'Invalid calibration data (baseline: ${baseline.toStringAsFixed(4)}). Please ensure your face is clearly visible and try again.';
+        _phase = _CalPhase.failed;
+        _status = 'That distance didn’t look right. Sit a little farther back and retry.';
       });
       return;
     }
-    
-    // Calculate some statistics for better feedback
-    final minSample = _samples.reduce((a, b) => a < b ? a : b);
-    final maxSample = _samples.reduce((a, b) => a > b ? a : b);
-    final avgSample = _samples.reduce((a, b) => a + b) / _samples.length;
-    
+
+    await PrefsHelper.setBaselineIod(baseline);
+    await PrefsHelper.setIsCalibrated(true);
+
+    if (!mounted) return;
     setState(() {
-      _status = 'Calibration successful!\n'
-          'Baseline: ${baseline.toStringAsFixed(4)}\n'
-          'Range: ${minSample.toStringAsFixed(4)} - ${maxSample.toStringAsFixed(4)}\n'
-          'Average: ${avgSample.toStringAsFixed(4)}\n'
-          'Samples: ${_samples.length}';
+      _phase = _CalPhase.success;
+      _status = 'Nice. This is your comfortable distance.';
     });
-
-    if (kDebugMode) {
-      print('Calibration complete:');
-      print('  Baseline (median): $baseline');
-      print('  Average: $avgSample');
-      print('  Min: $minSample, Max: $maxSample');
-      print('  Samples: $_samples');
-    }
-
-    // Save calibration data
-    PrefsHelper.setBaselineArea(baseline);
-    PrefsHelper.setIsCalibrated(true);
-
-    // Wait a moment to show results, then navigate
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Dispose camera and navigate
-    await _disposeCameraAndNavigate();
+    await Future.delayed(const Duration(milliseconds: 1400));
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
   }
 
-  Future<void> _disposeCameraAndNavigate() async {
-    // Stop image stream first to prevent further processing
-    if (_isImageStreamActive) {
-      try {
-        await _controller?.stopImageStream();
-        _isImageStreamActive = false;
-      } catch (e) {
-        if (kDebugMode) print('Error stopping image stream: $e');
-      }
-    }
-    
-    // Stop face detector
-    _faceDetector.dispose();
-    
-    // Cancel subscriptions
-    _calibrationTimer?.cancel();
-    _detectionSubscription?.cancel();
-    
-    // Wait a moment for all operations to complete
-    await Future.delayed(const Duration(milliseconds: 1000));
-    
-    // Dispose the controller
-    try {
-      await _controller?.dispose();
-    } catch (e) {
-      if (kDebugMode) print('Error disposing camera controller: $e');
-    }
-    
-    if (mounted) {
-      setState(() {
-        _controller = null;
-        _isCameraInitialized = false;
-      });
-    }
-
-    // Give a moment for resources to release
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
-    }
-  }
-
-  void _skipCalibration() async {
-    // For demo purposes, set a default baseline
-    PrefsHelper.setBaselineArea(0.15); // Default baseline
-    PrefsHelper.setIsCalibrated(true);
-    
-    await _controller?.dispose();
-    if (mounted) {
-      setState(() {
-        _controller = null;
-      });
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
-    }
+  Future<void> _retry() async {
+    _timer?.cancel();
+    await _stopNative();
+    setState(() {
+      _phase = _CalPhase.preview;
+      _samples.clear();
+      _status = 'Sit at a comfortable distance and align your face.';
+    });
+    if (_controller == null) await _openPreview();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Calibration'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: Column(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          // Camera Preview - fills space naturally like a modern camera app
-          Expanded(
-            flex: 3,
-            child: Container(
-              width: double.infinity,
-              color: Colors.black,
-              child: _isCameraInitialized && 
-                     _controller != null && 
-                     _controller!.value.isInitialized
-                  ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRect(
-                          child: OverflowBox(
-                            alignment: Alignment.center,
-                            child: FittedBox(
-                              fit: BoxFit.cover,
-                              child: SizedBox(
-                                width: _controller!.value.previewSize?.height ?? 1,
-                                height: _controller!.value.previewSize?.width ?? 1,
-                                child: CameraPreview(_controller!),
-                              ),
-                            ),
-                          ),
-                        ),
-                        // Face Overlay
-                        FaceOverlay(
-                          faceRect: _currentFaceRect,
-                          imageSize: Size(
-                            _lastFrameWidth.toDouble(),
-                            _lastFrameHeight.toDouble(),
-                          ),
-                          isFront: true,
-                          faceDetected: _faceDetected,
-                        ),
-                      ],
-                    )
-                  : const Center(
-                      child: CircularProgressIndicator(),
-                    ),
-            ),
-          ),
-          
-          // Status and Controls
-          Expanded(
-            flex: 2,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    _status,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  if (_samples.isNotEmpty)
-                    Column(
-                      children: [
-                        LinearProgressIndicator(
-                          value: _samples.length / 15,
-                          backgroundColor: Colors.grey[300],
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Theme.of(context).primaryColor,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${_samples.length}/15 samples',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          _buildStage(),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 4, 16, 0),
+                  child: Row(
                     children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _isCameraInitialized && !_isCalibrating
-                              ? _startCalibration
-                              : null,
-                          child: const Text('Start Calibration'),
-                        ),
+                      IconButton(
+                        onPressed: () async {
+                          _timer?.cancel();
+                          await _stopNative();
+                          if (!mounted) return;
+                          if (PrefsHelper.getIsCalibrated()) {
+                            Navigator.of(context).pushReplacement(
+                              MaterialPageRoute(builder: (_) => const HomeScreen()),
+                            );
+                          } else {
+                            Navigator.of(context).maybePop();
+                          }
+                        },
+                        icon: const Icon(Icons.close_rounded, color: Colors.white),
                       ),
-                      
-                      if (_isCalibrating) ...[
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: _stopCalibration,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              foregroundColor: Colors.white,
+                      const Spacer(),
+                      Text(
+                        'Calibration',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: Colors.white,
                             ),
-                            child: const Text('Stop'),
-                          ),
-                        ),
-                      ],
+                      ),
+                      const Spacer(),
+                      const SizedBox(width: 48),
                     ],
                   ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  const Text(
-                    'Instructions:\n'
-                    '1. Sit at your comfortable viewing distance\n'
-                    '2. Look directly at the camera\n'
-                    '3. Stay still during calibration\n'
-                    '4. This will be your baseline distance',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ),
+                ),
+                const Spacer(),
+                _bottomSheet(context),
+              ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStage() {
+    switch (_phase) {
+      case _CalPhase.preview:
+      case _CalPhase.countdown:
+        if (_cameraReady &&
+            _controller != null &&
+            _controller!.value.isInitialized) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _controller!.value.previewSize?.height ?? 1,
+                  height: _controller!.value.previewSize?.width ?? 1,
+                  child: CameraPreview(_controller!),
+                ),
+              ),
+              const FaceGuideOverlay(),
+              if (_phase == _CalPhase.countdown)
+                Center(
+                  child: Text(
+                    '$_countdown',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 88,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        }
+        return const Center(child: CircularProgressIndicator());
+      case _CalPhase.sampling:
+        return EyeScanVisual(
+          progress: (_samples.length / _targetSamples).clamp(0, 1),
+          faceDetected: _faceDetected,
+        );
+      case _CalPhase.success:
+        return const Center(
+          child: BrandRings(
+            size: 220,
+            child: Icon(Icons.check_rounded, color: Color(0xFF3DDC97), size: 64),
+          ),
+        );
+      case _CalPhase.failed:
+        return const Center(
+          child: BrandRings(
+            size: 200,
+            color: Color(0xFFFF8A80),
+            child: Icon(Icons.visibility_off_outlined, color: Colors.white70, size: 48),
+          ),
+        );
+    }
+  }
+
+  Widget _bottomSheet(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 22, 24, 24),
+      decoration: const BoxDecoration(
+        color: Color(0xF2151D2E),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _status,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.4),
+          ),
+          if (_phase == _CalPhase.sampling) ...[
+            const SizedBox(height: 16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: _samples.length / _targetSamples,
+                minHeight: 8,
+                backgroundColor: Colors.white12,
+                color: AppColors.brandSoft,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _faceDetected
+                  ? '${_samples.length}/$_targetSamples  ·  eyes found'
+                  : 'Looking for both eyes…',
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ],
+          const SizedBox(height: 20),
+          if (_phase == _CalPhase.preview)
+            PrimaryButton(
+              label: 'Start calibration',
+              icon: Icons.center_focus_strong,
+              onPressed: _cameraReady ? _begin : null,
+            ),
+          if (_phase == _CalPhase.failed)
+            PrimaryButton(
+              label: 'Try again',
+              icon: Icons.refresh_rounded,
+              onPressed: _retry,
+            ),
+          if (_phase == _CalPhase.countdown || _phase == _CalPhase.sampling)
+            SecondaryButton(
+              label: 'Cancel',
+              onPressed: _retry,
+            ),
         ],
       ),
     );

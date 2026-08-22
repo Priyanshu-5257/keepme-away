@@ -1,42 +1,32 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/calibration_screen.dart';
 import 'utils/prefs.dart';
+import 'utils/page_transitions.dart';
 import 'utils/theme_provider.dart';
-import 'services/face_detector.dart';
+
+final navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize preferences
   await PrefsHelper.init();
-  
-  // Pre-warm ML Kit face detector to reduce cold-start latency
-  final faceDetector = FaceDetectorService();
-  faceDetector.initialize();
-  await faceDetector.warmUp();
-  
-  // Load saved theme
   final themeMode = await AppTheme.getSavedThemeMode();
-  
   runApp(ScreenProtectorApp(initialThemeMode: themeMode));
 }
 
 class ScreenProtectorApp extends StatefulWidget {
   final ThemeMode initialThemeMode;
-  
+
   const ScreenProtectorApp({super.key, required this.initialThemeMode});
-  
-  // Global key for theme changes
-  static final GlobalKey<_ScreenProtectorAppState> appKey = GlobalKey();
-  
+
   static void setThemeMode(BuildContext context, ThemeMode mode) {
-    final state = context.findAncestorStateOfType<_ScreenProtectorAppState>();
-    state?.setThemeMode(mode);
+    context.findAncestorStateOfType<_ScreenProtectorAppState>()?.setThemeMode(mode);
   }
-  
+
   static ThemeMode getThemeMode(BuildContext context) {
-    final state = context.findAncestorStateOfType<_ScreenProtectorAppState>();
-    return state?._themeMode ?? ThemeMode.system;
+    return context.findAncestorStateOfType<_ScreenProtectorAppState>()?._themeMode ??
+        ThemeMode.system;
   }
 
   @override
@@ -44,14 +34,22 @@ class ScreenProtectorApp extends StatefulWidget {
 }
 
 class _ScreenProtectorAppState extends State<ScreenProtectorApp> {
+  static const _channel = MethodChannel('protection_service');
   late ThemeMode _themeMode;
-  
+
   @override
   void initState() {
     super.initState();
     _themeMode = widget.initialThemeMode;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'openCalibration') {
+        navigatorKey.currentState?.push(
+          PageTransitions.fadeScale(const CalibrationScreen()),
+        );
+      }
+    });
   }
-  
+
   void setThemeMode(ThemeMode mode) {
     setState(() => _themeMode = mode);
     AppTheme.saveThemeMode(mode);
@@ -61,6 +59,7 @@ class _ScreenProtectorAppState extends State<ScreenProtectorApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'KeepMe Away',
+      navigatorKey: navigatorKey,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: _themeMode,

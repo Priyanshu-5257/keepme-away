@@ -8,54 +8,65 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.io.FileInputStream
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
-import java.io.FileInputStream
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.hypot
 import org.tensorflow.lite.Interpreter
+
+data class FaceDetectionResult(
+    val faceDetected: Boolean,
+    val iod: Float,
+    val leftEyeX: Float = 0f,
+    val leftEyeY: Float = 0f,
+    val rightEyeX: Float = 0f,
+    val rightEyeY: Float = 0f,
+    val confidence: Float = 0f,
+)
 
 class FaceDetectionManager(private val context: Context) {
     private val TAG = "FaceDetectionManager"
-    
-    private var cameraManager: CameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+
+    private var cameraManager: CameraManager =
+        context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
-    
+
     private val cameraOpenCloseLock = Semaphore(1)
     private var cameraId: String? = null
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessTime = 0L
-    private val processingInterval = 300L // Process every 300ms for balanced battery/responsiveness
-    
-    // Frame throttling
+    private val processingInterval = 300L
+
     private var frameCount = 0
-    private val frameSkipCount = 2 // Process every Nth frame
-    
-    // Adaptive detection
+    private val frameSkipCount = 2
+
     private var consecutiveStableReadings = 0
-    private var lastArea = 0f
-    private val stabilityThreshold = 0.05f // 5% change considered stable
+    private var lastIod = 0f
+    private val stabilityThreshold = 0.05f
     private val stableCountForSlowdown = 10
     private var adaptiveSkipMultiplier = 1
-    
-    // Smoothing - moving average to reduce jitter
-    private val recentAreas = mutableListOf<Float>()
-    private val smoothingWindowSize = 5 // Average over last 5 readings
-    
-    // TFLite interpreter for BlazeFace model
+
+    private val recentIods = mutableListOf<Float>()
+    private val smoothingWindowSize = 5
+
     private var interpreter: Interpreter? = null
     private val INPUT_SIZE = 128
-    
+    var confidenceThreshold = 0.5f
+
+    // Normalized IOD must look like two distinct eye points on a frontal face.
+    private val minIod = 0.02f
+    private val maxIod = 0.55f
+
     init {
         loadModel()
     }
-    
+
     private fun loadModel() {
         try {
             val modelBuffer = loadModelFile()
@@ -68,52 +79,53 @@ class FaceDetectionManager(private val context: Context) {
             Log.e(TAG, "Error loading TFLite model", e)
         }
     }
-    
+
     private fun loadModelFile(): MappedByteBuffer {
-        val fileDescriptor = context.assets.openFd("flutter_assets/assets/face_detection_short_range.tflite")
+        val fileDescriptor =
+            context.assets.openFd("flutter_assets/assets/face_detection_short_range.tflite")
         val inputStream = FileInputStream(fileDescriptor.fileDescriptor)
         val fileChannel = inputStream.channel
         val startOffset = fileDescriptor.startOffset
         val declaredLength = fileDescriptor.declaredLength
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
-    
+
     interface FaceDetectionCallback {
-        fun onFaceDetected(area: Float)
+        fun onFaceDetected(result: FaceDetectionResult)
         fun onError(error: String)
     }
-    
+
     private var callback: FaceDetectionCallback? = null
-    
+
     fun setCallback(callback: FaceDetectionCallback) {
         this.callback = callback
     }
-    
+
     fun startDetection() {
         Log.d(TAG, "Starting face detection...")
-        
-        // Ensure clean state first
         stopDetection()
-        
-        // Add delay to let any previous camera usage finish
-        Thread.sleep(2000) // Longer delay for cleanup
-        
+        try {
+            Thread.sleep(400)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         startBackgroundThread()
         openCamera()
     }
-    
+
     fun stopDetection() {
         Log.d(TAG, "Stopping face detection...")
         closeCamera()
         stopBackgroundThread()
         isProcessing.set(false)
+        recentIods.clear()
     }
-    
+
     private fun startBackgroundThread() {
         backgroundThread = HandlerThread("CameraBackground").also { it.start() }
         backgroundHandler = Handler(backgroundThread?.looper!!)
     }
-    
+
     private fun stopBackgroundThread() {
         backgroundThread?.quitSafely()
         try {
@@ -124,7 +136,7 @@ class FaceDetectionManager(private val context: Context) {
             Log.e(TAG, "Error stopping background thread", e)
         }
     }
-    
+
     private fun openCamera() {
         try {
             cameraId = getFrontCameraId()
@@ -132,18 +144,17 @@ class FaceDetectionManager(private val context: Context) {
                 callback?.onError("No front camera found")
                 return
             }
-            
+
             setupImageReader()
-            
+
             if (!cameraOpenCloseLock.tryAcquire(5000, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                Log.e(TAG, "Camera lock timeout - another app might be using camera")
-                callback?.onError("Camera busy - please close other camera apps")
+                Log.e(TAG, "Camera lock timeout")
+                callback?.onError("Camera busy — close other camera apps and try again")
                 return
             }
-            
+
             Log.d(TAG, "Opening camera $cameraId")
             cameraManager.openCamera(cameraId!!, stateCallback, backgroundHandler)
-            
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error opening camera", e)
             callback?.onError("Camera access error: ${e.message}")
@@ -158,14 +169,14 @@ class FaceDetectionManager(private val context: Context) {
             cameraOpenCloseLock.release()
         }
     }
-    
+
     private fun getFrontCameraId(): String? {
         try {
-            for (cameraId in cameraManager.cameraIdList) {
-                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            for (id in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(id)
                 val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
                 if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    return cameraId
+                    return id
                 }
             }
         } catch (e: CameraAccessException) {
@@ -173,15 +184,12 @@ class FaceDetectionManager(private val context: Context) {
         }
         return null
     }
-    
+
     private fun setupImageReader() {
-        // Use 320x240 for better battery (face detection doesn't need high resolution)
-        // Use 4 buffers to prevent "Unable to acquire buffer" warnings
         imageReader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 4)
         imageReader?.setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
-        Log.d(TAG, "ImageReader setup: 320x240 with 4 buffers (optimized for battery)")
     }
-    
+
     private val stateCallback = object : CameraDevice.StateCallback() {
         override fun onOpened(camera: CameraDevice) {
             Log.d(TAG, "Camera opened successfully")
@@ -189,14 +197,14 @@ class FaceDetectionManager(private val context: Context) {
             cameraDevice = camera
             createCaptureSession()
         }
-        
+
         override fun onDisconnected(camera: CameraDevice) {
             Log.d(TAG, "Camera disconnected")
             cameraOpenCloseLock.release()
             camera.close()
             cameraDevice = null
         }
-        
+
         override fun onError(camera: CameraDevice, error: Int) {
             Log.e(TAG, "Camera error: $error")
             cameraOpenCloseLock.release()
@@ -205,7 +213,7 @@ class FaceDetectionManager(private val context: Context) {
             callback?.onError("Camera error: $error")
         }
     }
-    
+
     private fun createCaptureSession() {
         try {
             val surface = imageReader?.surface
@@ -213,7 +221,8 @@ class FaceDetectionManager(private val context: Context) {
                 Log.e(TAG, "ImageReader surface is null")
                 return
             }
-            
+
+            @Suppress("DEPRECATION")
             cameraDevice?.createCaptureSession(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
@@ -222,7 +231,7 @@ class FaceDetectionManager(private val context: Context) {
                         captureSession = session
                         startRepeatingRequest()
                     }
-                    
+
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         Log.e(TAG, "Failed to configure capture session")
                         callback?.onError("Failed to configure camera session")
@@ -235,51 +244,42 @@ class FaceDetectionManager(private val context: Context) {
             callback?.onError("Error creating camera session")
         }
     }
-    
+
     private fun startRepeatingRequest() {
         try {
             val surface = imageReader?.surface ?: return
-            
-            val captureRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            val captureRequestBuilder =
+                cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
             captureRequestBuilder?.addTarget(surface)
-            
             captureSession?.setRepeatingRequest(
                 captureRequestBuilder?.build()!!,
                 null,
                 backgroundHandler
             )
-            
-            Log.d(TAG, "Started repeating capture request")
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Error starting repeating request", e)
         }
     }
-    
+
     private val onImageAvailableListener = ImageReader.OnImageAvailableListener { reader ->
-        // Frame skip throttling (battery optimization)
         frameCount++
         val effectiveSkip = frameSkipCount * adaptiveSkipMultiplier
         if (frameCount % effectiveSkip != 0) {
-            val image = reader.acquireLatestImage()
-            image?.close()
+            reader.acquireLatestImage()?.close()
             return@OnImageAvailableListener
         }
-        
-        // Time-based throttle as backup
+
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastProcessTime < processingInterval) {
-            val image = reader.acquireLatestImage()
-            image?.close()
+            reader.acquireLatestImage()?.close()
             return@OnImageAvailableListener
         }
-        
-        // Only process if not already processing
+
         if (!isProcessing.compareAndSet(false, true)) {
-            val image = reader.acquireLatestImage()
-            image?.close()
+            reader.acquireLatestImage()?.close()
             return@OnImageAvailableListener
         }
-        
+
         try {
             val image = reader.acquireLatestImage()
             if (image != null) {
@@ -293,39 +293,26 @@ class FaceDetectionManager(private val context: Context) {
             isProcessing.set(false)
         }
     }
-    
+
     private fun processImageSafely(image: Image) {
         try {
             val tfliteInterpreter = interpreter
             if (tfliteInterpreter == null) {
-                Log.e(TAG, "TFLite interpreter not initialized")
-                callback?.onFaceDetected(0.0f)
-                image.close()
-                isProcessing.set(false)
+                callback?.onFaceDetected(FaceDetectionResult(false, 0f))
                 return
             }
-            
-            // Convert YUV image to RGB float array for BlazeFace input
+
             val inputArray = preprocessImage(image)
-            
-            // Prepare output buffers for BlazeFace
-            // BlazeFace short range outputs:
-            // Output 0: [1, 896, 16] - regressors (bounding box coordinates)
-            // Output 1: [1, 896, 1] - classificators (confidence scores)
             val regressors = Array(1) { Array(896) { FloatArray(16) } }
             val classificators = Array(1) { Array(896) { FloatArray(1) } }
-            
             val outputMap = HashMap<Int, Any>()
             outputMap[0] = regressors
             outputMap[1] = classificators
-            
-            // Run inference
+
             tfliteInterpreter.runForMultipleInputsOutputs(arrayOf(inputArray), outputMap)
-            
-            // Parse results
+
             var maxConfidence = 0f
             var bestIdx = -1
-            
             for (i in 0 until 896) {
                 val confidence = sigmoid(classificators[0][i][0])
                 if (confidence > maxConfidence) {
@@ -333,144 +320,141 @@ class FaceDetectionManager(private val context: Context) {
                     bestIdx = i
                 }
             }
-            
-            Log.d(TAG, "TFLite processing - Max confidence: $maxConfidence at idx: $bestIdx")
-            
-            if (maxConfidence > 0.5f && bestIdx >= 0) {
-                // Extract bounding box from regressors
-                // BlazeFace uses SSD anchors, the regressor values are offsets
-                val anchor = getAnchor(bestIdx)
-                
-                val cx = regressors[0][bestIdx][0] / INPUT_SIZE + anchor.first
-                val cy = regressors[0][bestIdx][1] / INPUT_SIZE + anchor.second
-                val w = regressors[0][bestIdx][2] / INPUT_SIZE
-                val h = regressors[0][bestIdx][3] / INPUT_SIZE
-                
-                // Calculate face area relative to image
-                val faceArea = (w * h).coerceIn(0f, 1f)
-                
-                // Add to smoothing buffer
-                recentAreas.add(faceArea)
-                if (recentAreas.size > smoothingWindowSize) {
-                    recentAreas.removeAt(0)
-                }
-                
-                // Calculate smoothed area (moving average)
-                val smoothedArea = if (recentAreas.isNotEmpty()) {
-                    recentAreas.sum() / recentAreas.size
-                } else {
-                    faceArea
-                }
-                
-                Log.d(TAG, "Face detected - Raw: $faceArea, Smoothed: $smoothedArea, Confidence: $maxConfidence")
-                
-                // Update adaptive mode based on stability
-                updateAdaptiveMode(smoothedArea)
-                
-                // Report smoothed result
-                callback?.onFaceDetected(smoothedArea)
+
+            val parsed = if (maxConfidence > confidenceThreshold && bestIdx >= 0) {
+                parseIod(regressors[0][bestIdx], bestIdx, maxConfidence)
             } else {
-                // No face detected - clear smoothing buffer
-                recentAreas.clear()
-                callback?.onFaceDetected(0.0f)
-                Log.d(TAG, "No faces detected (max confidence: $maxConfidence)")
+                null
             }
-            
+
+            if (parsed != null) {
+                recentIods.add(parsed.iod)
+                if (recentIods.size > smoothingWindowSize) {
+                    recentIods.removeAt(0)
+                }
+                val smoothed = recentIods.average().toFloat()
+                updateAdaptiveMode(smoothed)
+                callback?.onFaceDetected(parsed.copy(iod = smoothed))
+            } else {
+                recentIods.clear()
+                consecutiveStableReadings = 0
+                adaptiveSkipMultiplier = 1
+                callback?.onFaceDetected(FaceDetectionResult(false, 0f, confidence = maxConfidence))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error processing image with TFLite", e)
-            callback?.onFaceDetected(0.0f)
+            callback?.onFaceDetected(FaceDetectionResult(false, 0f))
         } finally {
             image.close()
             isProcessing.set(false)
         }
     }
-    
+
+    /**
+     * BlazeFace short-range regressors: [cx, cy, w, h, 6 keypoints * (x, y)].
+     * Keypoints: 0 left eye, 1 right eye, 2 nose, 3 mouth, 4 left ear, 5 right ear.
+     * IOD is the Euclidean distance between the two eye points in normalized image space.
+     */
+    private fun parseIod(
+        regressor: FloatArray,
+        index: Int,
+        confidence: Float,
+    ): FaceDetectionResult? {
+        val anchor = getAnchor(index)
+
+        fun keypoint(k: Int): Pair<Float, Float> {
+            val x = regressor[4 + 2 * k] / INPUT_SIZE + anchor.first
+            val y = regressor[5 + 2 * k] / INPUT_SIZE + anchor.second
+            return x to y
+        }
+
+        val (lx, ly) = keypoint(0)
+        val (rx, ry) = keypoint(1)
+
+        val inFrame = { x: Float, y: Float -> x in -0.05f..1.05f && y in -0.05f..1.05f }
+        if (!inFrame(lx, ly) || !inFrame(rx, ry)) return null
+
+        val iod = hypot(rx - lx, ry - ly)
+        if (iod < minIod || iod > maxIod) return null
+
+        return FaceDetectionResult(
+            faceDetected = true,
+            iod = iod,
+            leftEyeX = lx,
+            leftEyeY = ly,
+            rightEyeX = rx,
+            rightEyeY = ry,
+            confidence = confidence,
+        )
+    }
+
     private fun sigmoid(x: Float): Float {
         return (1.0f / (1.0f + Math.exp(-x.toDouble()))).toFloat()
     }
-    
-    /**
-     * Preprocess YUV_420_888 image to float array for BlazeFace input.
-     * BlazeFace expects [1, 128, 128, 3] float input normalized to [-1, 1].
-     */
+
     private fun preprocessImage(image: Image): Array<Array<Array<FloatArray>>> {
         val width = image.width
         val height = image.height
-        
+
         val yBuffer = image.planes[0].buffer
         val uBuffer = image.planes[1].buffer
         val vBuffer = image.planes[2].buffer
-        
+
         val yRowStride = image.planes[0].rowStride
         val uvRowStride = image.planes[1].rowStride
         val uvPixelStride = image.planes[1].pixelStride
-        
+
         val inputArray = Array(1) { Array(INPUT_SIZE) { Array(INPUT_SIZE) { FloatArray(3) } } }
-        
+
         val scaleX = width.toFloat() / INPUT_SIZE
         val scaleY = height.toFloat() / INPUT_SIZE
-        
+
         for (y in 0 until INPUT_SIZE) {
             for (x in 0 until INPUT_SIZE) {
                 val srcX = (x * scaleX).toInt().coerceIn(0, width - 1)
                 val srcY = (y * scaleY).toInt().coerceIn(0, height - 1)
-                
+
                 val yIdx = srcY * yRowStride + srcX
                 val uvIdx = (srcY / 2) * uvRowStride + (srcX / 2) * uvPixelStride
-                
+
                 val yVal = (yBuffer.get(yIdx).toInt() and 0xFF).toFloat()
-                val uVal = if (uvIdx < uBuffer.capacity()) (uBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
-                val vVal = if (uvIdx < vBuffer.capacity()) (vBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
-                
-                // YUV to RGB conversion
+                val uVal =
+                    if (uvIdx < uBuffer.capacity()) (uBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
+                val vVal =
+                    if (uvIdx < vBuffer.capacity()) (vBuffer.get(uvIdx).toInt() and 0xFF).toFloat() else 128f
+
                 var r = yVal + 1.370705f * (vVal - 128f)
                 var g = yVal - 0.337633f * (uVal - 128f) - 0.698001f * (vVal - 128f)
                 var b = yVal + 1.732446f * (uVal - 128f)
-                
+
                 r = r.coerceIn(0f, 255f)
                 g = g.coerceIn(0f, 255f)
                 b = b.coerceIn(0f, 255f)
-                
-                // Normalize to [-1, 1] for BlazeFace
+
                 inputArray[0][y][x][0] = (r / 127.5f) - 1.0f
                 inputArray[0][y][x][1] = (g / 127.5f) - 1.0f
                 inputArray[0][y][x][2] = (b / 127.5f) - 1.0f
             }
         }
-        
+
         return inputArray
     }
-    
-    /**
-     * Generate BlazeFace SSD anchors.
-     * BlazeFace uses a specific anchor generation scheme.
-     */
+
     private fun getAnchor(index: Int): Pair<Float, Float> {
-        // BlazeFace short range uses 2 anchor layers:
-        // Layer 0: stride 8, 2 anchors per position -> 16x16x2 = 512 anchors
-        // Layer 1: stride 16, 6 anchors per position -> 8x8x6 = 384 anchors
-        // Total: 896 anchors
-        
         if (index < 512) {
-            // Layer 0: 16x16 grid, 2 anchors per cell
             val cellIdx = index / 2
             val gridX = cellIdx % 16
             val gridY = cellIdx / 16
-            val cx = (gridX + 0.5f) / 16f
-            val cy = (gridY + 0.5f) / 16f
-            return Pair(cx, cy)
+            return Pair((gridX + 0.5f) / 16f, (gridY + 0.5f) / 16f)
         } else {
-            // Layer 1: 8x8 grid, 6 anchors per cell
             val adjustedIdx = index - 512
             val cellIdx = adjustedIdx / 6
             val gridX = cellIdx % 8
             val gridY = cellIdx / 8
-            val cx = (gridX + 0.5f) / 8f
-            val cy = (gridY + 0.5f) / 8f
-            return Pair(cx, cy)
+            return Pair((gridX + 0.5f) / 8f, (gridY + 0.5f) / 8f)
         }
     }
-    
+
     private fun closeCamera() {
         try {
             cameraOpenCloseLock.acquire()
@@ -486,23 +470,21 @@ class FaceDetectionManager(private val context: Context) {
             cameraOpenCloseLock.release()
         }
     }
-    
-    private fun updateAdaptiveMode(currentArea: Float) {
-        val change = kotlin.math.abs(currentArea - lastArea)
-        val relativeChange = if (lastArea > 0) change / lastArea else 1f
-        
+
+    private fun updateAdaptiveMode(currentIod: Float) {
+        val change = kotlin.math.abs(currentIod - lastIod)
+        val relativeChange = if (lastIod > 0) change / lastIod else 1f
+
         if (relativeChange < stabilityThreshold) {
             consecutiveStableReadings++
             if (consecutiveStableReadings >= stableCountForSlowdown) {
-                // User is stable, slow down detection to save battery
                 adaptiveSkipMultiplier = 2
             }
         } else {
-            // Movement detected, speed up detection
             consecutiveStableReadings = 0
             adaptiveSkipMultiplier = 1
         }
-        
-        lastArea = currentArea
+
+        lastIod = currentIod
     }
 }

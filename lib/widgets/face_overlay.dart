@@ -1,144 +1,121 @@
 import 'package:flutter/material.dart';
+import '../utils/theme_provider.dart';
 
-/// Painter to draw face detection overlay on camera preview
-class FaceOverlayPainter extends CustomPainter {
-  final Rect? faceRect;
-  final Size imageSize;
-  final bool isFront;
-  final Color color;
-  
-  FaceOverlayPainter({
-    this.faceRect,
-    required this.imageSize,
-    this.isFront = true,
-    this.color = Colors.green,
-  });
-  
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (faceRect == null || imageSize.isEmpty) return;
-    
-    // Scale factors to convert from image coordinates to canvas coordinates
-    final scaleX = size.width / imageSize.width;
-    final scaleY = size.height / imageSize.height;
-    
-    // Mirror horizontally for front camera
-    double left = faceRect!.left * scaleX;
-    double right = faceRect!.right * scaleX;
-    
-    if (isFront) {
-      // Mirror the coordinates for front camera
-      final temp = left;
-      left = size.width - right;
-      right = size.width - temp;
-    }
-    
-    final scaledRect = Rect.fromLTRB(
-      left,
-      faceRect!.top * scaleY,
-      right,
-      faceRect!.bottom * scaleY,
-    );
-    
-    // Draw corner brackets instead of full rectangle for modern look
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0
-      ..strokeCap = StrokeCap.round;
-    
-    final cornerLength = scaledRect.width * 0.2;
-    
-    // Top-left corner
-    canvas.drawLine(
-      Offset(scaledRect.left, scaledRect.top + cornerLength),
-      Offset(scaledRect.left, scaledRect.top),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(scaledRect.left, scaledRect.top),
-      Offset(scaledRect.left + cornerLength, scaledRect.top),
-      paint,
-    );
-    
-    // Top-right corner
-    canvas.drawLine(
-      Offset(scaledRect.right - cornerLength, scaledRect.top),
-      Offset(scaledRect.right, scaledRect.top),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(scaledRect.right, scaledRect.top),
-      Offset(scaledRect.right, scaledRect.top + cornerLength),
-      paint,
-    );
-    
-    // Bottom-left corner
-    canvas.drawLine(
-      Offset(scaledRect.left, scaledRect.bottom - cornerLength),
-      Offset(scaledRect.left, scaledRect.bottom),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(scaledRect.left, scaledRect.bottom),
-      Offset(scaledRect.left + cornerLength, scaledRect.bottom),
-      paint,
-    );
-    
-    // Bottom-right corner
-    canvas.drawLine(
-      Offset(scaledRect.right - cornerLength, scaledRect.bottom),
-      Offset(scaledRect.right, scaledRect.bottom),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(scaledRect.right, scaledRect.bottom),
-      Offset(scaledRect.right, scaledRect.bottom - cornerLength),
-      paint,
-    );
-    
-    // Draw subtle fill
-    final fillPaint = Paint()
-      ..color = color.withValues(alpha: 0.1)
-      ..style = PaintingStyle.fill;
-    
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(scaledRect, const Radius.circular(8)),
-      fillPaint,
-    );
-  }
-  
-  @override
-  bool shouldRepaint(FaceOverlayPainter oldDelegate) {
-    return faceRect != oldDelegate.faceRect || color != oldDelegate.color;
-  }
-}
+/// Face-ID style oval used while positioning for calibration.
+class FaceGuideOverlay extends StatelessWidget {
+  final bool aligned;
 
-/// Widget that displays face overlay on top of camera preview
-class FaceOverlay extends StatelessWidget {
-  final Rect? faceRect;
-  final Size imageSize;
-  final bool isFront;
-  final bool faceDetected;
-  
-  const FaceOverlay({
-    super.key,
-    this.faceRect,
-    required this.imageSize,
-    this.isFront = true,
-    this.faceDetected = false,
-  });
-  
+  const FaceGuideOverlay({super.key, this.aligned = false});
+
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: FaceOverlayPainter(
-        faceRect: faceRect,
-        imageSize: imageSize,
-        isFront: isFront,
-        color: faceDetected ? Colors.green : Colors.orange,
+      painter: _OvalGuidePainter(
+        color: aligned ? const Color(0xFF3DDC97) : AppColors.ring,
       ),
-      child: Container(),
+      child: const SizedBox.expand(),
     );
   }
+}
+
+class _OvalGuidePainter extends CustomPainter {
+  final Color color;
+  _OvalGuidePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final oval = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height * 0.46),
+      width: size.width * 0.62,
+      height: size.height * 0.58,
+    );
+
+    final dim = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
+      ..addOval(oval)
+      ..fillType = PathFillType.evenOdd;
+    canvas.drawPath(
+      dim,
+      Paint()..color = Colors.black.withValues(alpha: 0.38),
+    );
+
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+
+    const sweep = 0.42;
+    for (final start in [0.95, 2.52, 4.08, 5.65]) {
+      canvas.drawArc(oval, start, sweep, false, stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _OvalGuidePainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+/// Abstract two-eye visual used while sampling (no live camera).
+class EyeScanVisual extends StatelessWidget {
+  final double progress;
+  final bool faceDetected;
+
+  const EyeScanVisual({
+    super.key,
+    required this.progress,
+    required this.faceDetected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _EyeScanPainter(
+        progress: progress,
+        faceDetected: faceDetected,
+      ),
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+class _EyeScanPainter extends CustomPainter {
+  final double progress;
+  final bool faceDetected;
+
+  _EyeScanPainter({required this.progress, required this.faceDetected});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final color = faceDetected ? const Color(0xFF5BA3D0) : const Color(0x66FFFFFF);
+
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    for (var i = 1; i <= 4; i++) {
+      ring.color = color.withValues(alpha: 0.12 + i * 0.08);
+      canvas.drawCircle(c, 36.0 + i * 28, ring);
+    }
+
+    final eyePaint = Paint()..color = color;
+    final eyeY = c.dy - 8;
+    final spread = 36 + progress * 18;
+    canvas.drawCircle(Offset(c.dx - spread, eyeY), 7, eyePaint);
+    canvas.drawCircle(Offset(c.dx + spread, eyeY), 7, eyePaint);
+
+    final line = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(c.dx - spread + 10, eyeY),
+      Offset(c.dx + spread - 10, eyeY),
+      line,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _EyeScanPainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.faceDetected != faceDetected;
 }

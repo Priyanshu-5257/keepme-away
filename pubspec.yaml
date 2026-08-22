@@ -37,14 +37,12 @@ dependencies:
   
   # Required dependencies for screen protector app
   camera: ^0.10.5+9
-  wakelock_plus: ^1.2.8
   shared_preferences: ^2.3.2
   permission_handler: ^11.3.1
-  tflite_flutter: ^0.11.0
   flutter_launcher_icons: ^0.13.1
-  fl_chart: ^1.1.1
   screenshot: ^3.0.0
   share_plus: ^12.0.1
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
-import '../utils/prefs.dart';
+import 'dart:io';
 import '../main.dart';
+import '../services/protection_service.dart';
+import '../utils/prefs.dart';
+import '../widgets/app_ui.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,545 +17,267 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late double _hysteresisGap;
   late int _warningTime;
   late double _detectionThreshold;
-  
-  // Schedule settings
-  late bool _scheduledEnabled;
-  late int _scheduleStartHour;
-  late int _scheduleEndHour;
-  
-  // Feedback settings
   late bool _hapticsEnabled;
-  late bool _soundEnabled;
-  late bool _breakReminderEnabled;
-  late int _breakReminderInterval;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
-  }
-
-  void _loadSettings() {
     _thresholdFactor = PrefsHelper.getThresholdFactor();
     _hysteresisGap = PrefsHelper.getHysteresisGap();
     _warningTime = PrefsHelper.getWarningTime();
     _detectionThreshold = PrefsHelper.getDetectionThreshold();
-    _scheduledEnabled = PrefsHelper.getScheduledEnabled();
-    _scheduleStartHour = PrefsHelper.getScheduleStartHour();
-    _scheduleEndHour = PrefsHelper.getScheduleEndHour();
     _hapticsEnabled = PrefsHelper.getHapticsEnabled();
-    _soundEnabled = PrefsHelper.getSoundEnabled();
-    _breakReminderEnabled = PrefsHelper.getBreakReminderEnabled();
-    _breakReminderInterval = PrefsHelper.getBreakReminderInterval();
   }
 
-  Future<void> _saveSettings() async {
+  Future<void> _persist() async {
     await PrefsHelper.setThresholdFactor(_thresholdFactor);
     await PrefsHelper.setHysteresisGap(_hysteresisGap);
     await PrefsHelper.setWarningTime(_warningTime);
     await PrefsHelper.setDetectionThreshold(_detectionThreshold);
-    await PrefsHelper.setScheduledEnabled(_scheduledEnabled);
-    await PrefsHelper.setScheduleStartHour(_scheduleStartHour);
-    await PrefsHelper.setScheduleEndHour(_scheduleEndHour);
     await PrefsHelper.setHapticsEnabled(_hapticsEnabled);
-    await PrefsHelper.setSoundEnabled(_soundEnabled);
-    await PrefsHelper.setBreakReminderEnabled(_breakReminderEnabled);
-    await PrefsHelper.setBreakReminderInterval(_breakReminderInterval);
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved')),
+
+    if (Platform.isAndroid && PrefsHelper.getIsProtectionActive()) {
+      await ProtectionService.start(
+        baselineIod: PrefsHelper.getBaselineIod(),
+        thresholdFactor: _thresholdFactor,
+        hysteresisGap: _hysteresisGap,
+        warningTime: _warningTime,
+        detectionThreshold: _detectionThreshold,
       );
     }
   }
 
-  void _resetToDefaults() {
-    setState(() {
-      _thresholdFactor = 1.6;
-      _hysteresisGap = 0.15;
-      _warningTime = 3;
-      _detectionThreshold = 0.5;
-      _scheduledEnabled = false;
-      _scheduleStartHour = 9;
-      _scheduleEndHour = 21;
-    });
+  Future<void> _save() async {
+    await _persist();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Settings saved')),
+    );
   }
 
-  String _formatHour(int hour) {
-    final h = hour % 12 == 0 ? 12 : hour % 12;
-    final ampm = hour < 12 ? 'AM' : 'PM';
-    return '$h:00 $ampm';
+  void _reset() {
+    setState(() {
+      _thresholdFactor = 1.4;
+      _hysteresisGap = 0.12;
+      _warningTime = 3;
+      _detectionThreshold = 0.5;
+      _hapticsEnabled = true;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final closer = PrefsHelper.percentCloser(_thresholdFactor);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          TextButton(
-            onPressed: _saveSettings,
-            child: const Text('Save'),
-          ),
+          TextButton(onPressed: _save, child: const Text('Save')),
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
-          // Appearance Card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.palette, color: Theme.of(context).colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Appearance',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.palette_outlined, color: scheme.primary),
+                    const SizedBox(width: 8),
+                    Text('Appearance', style: Theme.of(context).textTheme.titleMedium),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Theme'),
+                  trailing: DropdownButton<ThemeMode>(
+                    value: ScreenProtectorApp.getThemeMode(context),
+                    underline: const SizedBox(),
+                    borderRadius: BorderRadius.circular(12),
+                    items: const [
+                      DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
+                      DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                      DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
                     ],
-                  ),
-                  const SizedBox(height: 16),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      ScreenProtectorApp.getThemeMode(context) == ThemeMode.dark
-                          ? Icons.dark_mode
-                          : ScreenProtectorApp.getThemeMode(context) == ThemeMode.light
-                              ? Icons.light_mode
-                              : Icons.brightness_auto,
-                    ),
-                    title: const Text('Theme'),
-                    subtitle: const Text('Choose your preferred appearance'),
-                    trailing: DropdownButton<ThemeMode>(
-                      value: ScreenProtectorApp.getThemeMode(context),
-                      underline: const SizedBox(),
-                      items: const [
-                        DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
-                        DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                        DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
-                      ],
-                      onChanged: (mode) {
-                        if (mode != null) {
-                          ScreenProtectorApp.setThemeMode(context, mode);
-                          setState(() {});
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Detection Settings',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Threshold Factor
-                  Text(
-                    'Threshold Factor: ${_thresholdFactor.toStringAsFixed(2)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const Text(
-                    'Higher values = need to be closer to trigger (less sensitive)',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  Slider(
-                    value: _thresholdFactor,
-                    min: 1.2,
-                    max: 2.5,
-                    divisions: 26,
-                    onChanged: (value) {
-                      setState(() => _thresholdFactor = value);
+                    onChanged: (mode) {
+                      if (mode == null) return;
+                      ScreenProtectorApp.setThemeMode(context, mode);
+                      setState(() {});
                     },
                   ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  // Hysteresis Gap
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.visibility_outlined, color: scheme.primary),
+                    const SizedBox(width: 8),
+                    Text('Sensitivity', style: Theme.of(context).textTheme.titleMedium),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Warn when you are about $closer% closer than your calibrated distance.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                ),
+                Slider(
+                  value: _thresholdFactor,
+                  min: 1.15,
+                  max: 2.0,
+                  divisions: 17,
+                  label: '$closer% closer',
+                  onChanged: (v) => setState(() => _thresholdFactor = v),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Sooner', style: Theme.of(context).textTheme.labelSmall),
+                    Text('Later', style: Theme.of(context).textTheme.labelSmall),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.timer_outlined, color: scheme.primary),
+                    const SizedBox(width: 8),
+                    Text('Warning time', style: Theme.of(context).textTheme.titleMedium),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '$_warningTime second${_warningTime == 1 ? '' : 's'} before the screen is blocked.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                ),
+                Slider(
+                  value: _warningTime.toDouble(),
+                  min: 1,
+                  max: 8,
+                  divisions: 7,
+                  label: '$_warningTime s',
+                  onChanged: (v) => setState(() => _warningTime = v.round()),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          AppCard(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: SwitchListTile(
+              title: const Text('Haptic feedback'),
+              subtitle: const Text('Vibrate when a warning starts'),
+              secondary: Icon(Icons.vibration, color: scheme.primary),
+              value: _hapticsEnabled,
+              onChanged: (v) => setState(() => _hapticsEnabled = v),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: AppCard(
+              padding: EdgeInsets.zero,
+              child: ExpansionTile(
+                tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+                childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                leading: Icon(Icons.tune_rounded, color: scheme.primary),
+                title: const Text('Advanced'),
+                children: [
                   Text(
-                    'Hysteresis Gap: ${_hysteresisGap.toStringAsFixed(2)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    'Stability gap: ${_hysteresisGap.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const Text(
-                    'Prevents flickering between warning states',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  Text(
+                    'Stops the warning from flickering at the boundary.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurface.withValues(alpha: 0.6),
+                        ),
                   ),
                   Slider(
                     value: _hysteresisGap,
                     min: 0.05,
-                    max: 0.3,
-                    divisions: 25,
-                    onChanged: (value) {
-                      setState(() => _hysteresisGap = value);
-                    },
+                    max: 0.25,
+                    divisions: 20,
+                    onChanged: (v) => setState(() => _hysteresisGap = v),
                   ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  // Detection Threshold
+                  const SizedBox(height: 8),
                   Text(
-                    'Detection Threshold: ${_detectionThreshold.toStringAsFixed(2)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    'Face confidence: ${_detectionThreshold.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const Text(
-                    'Minimum confidence for face detection',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  Text(
+                    'Higher ignores weak detections (dark rooms, angles).',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurface.withValues(alpha: 0.6),
+                        ),
                   ),
                   Slider(
                     value: _detectionThreshold,
                     min: 0.3,
                     max: 0.8,
-                    divisions: 25,
-                    onChanged: (value) {
-                      setState(() => _detectionThreshold = value);
-                    },
+                    divisions: 10,
+                    onChanged: (v) => setState(() => _detectionThreshold = v),
                   ),
                 ],
               ),
             ),
           ),
-          
-          const SizedBox(height: 16),
-          
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Timing Settings',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Warning Time
-                  Text(
-                    'Warning Time: $_warningTime seconds',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const Text(
-                    'How long to show warning before blocking screen',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  Slider(
-                    value: _warningTime.toDouble(),
-                    min: 1,
-                    max: 10,
-                    divisions: 9,
-                    onChanged: (value) {
-                      setState(() => _warningTime = value.round());
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Current Calibration',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  Text('Baseline Area: ${PrefsHelper.getBaselineArea().toStringAsFixed(4)}'),
-                  Text('Calibrated: ${PrefsHelper.getIsCalibrated() ? 'Yes' : 'No'}'),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Current thresholds (calculated):',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  Text('Enter threshold: ${(PrefsHelper.getBaselineArea() * _thresholdFactor).toStringAsFixed(4)}'),
-                  Text('Exit threshold: ${(PrefsHelper.getBaselineArea() * (_thresholdFactor - _hysteresisGap).clamp(0.8, double.infinity)).toStringAsFixed(4)}'),
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          // Scheduled Protection Card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.schedule, color: Colors.purple),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Scheduled Protection',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Automatically enable protection during set hours',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  SwitchListTile(
-                    title: const Text('Enable Schedule'),
-                    subtitle: Text(
-                      _scheduledEnabled 
-                          ? 'Protection auto-starts ${_formatHour(_scheduleStartHour)} - ${_formatHour(_scheduleEndHour)}'
-                          : 'Manual control only',
-                    ),
-                    value: _scheduledEnabled,
-                    onChanged: (value) {
-                      setState(() => _scheduledEnabled = value);
-                    },
-                  ),
-                  
-                  if (_scheduledEnabled) ...[
-                    const SizedBox(height: 8),
-                    
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Start Time', style: TextStyle(fontWeight: FontWeight.bold)),
-                              DropdownButton<int>(
-                                value: _scheduleStartHour,
-                                isExpanded: true,
-                                items: List.generate(24, (i) => DropdownMenuItem(
-                                  value: i,
-                                  child: Text(_formatHour(i)),
-                                )),
-                                onChanged: (v) => setState(() => _scheduleStartHour = v!),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('End Time', style: TextStyle(fontWeight: FontWeight.bold)),
-                              DropdownButton<int>(
-                                value: _scheduleEndHour,
-                                isExpanded: true,
-                                items: List.generate(24, (i) => DropdownMenuItem(
-                                  value: i,
-                                  child: Text(_formatHour(i)),
-                                )),
-                                onChanged: (v) => setState(() => _scheduleEndHour = v!),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          
-          const SizedBox(height: 16),
-          
-          // Feedback & Alerts Card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.notifications_active, color: Theme.of(context).colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Feedback & Alerts',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  SwitchListTile(
-                    title: const Text('Haptic Feedback'),
-                    subtitle: const Text('Vibrate on warnings'),
-                    secondary: const Icon(Icons.vibration),
-                    value: _hapticsEnabled,
-                    onChanged: (value) {
-                      setState(() => _hapticsEnabled = value);
-                    },
-                  ),
-                  
-                  SwitchListTile(
-                    title: const Text('Sound Alerts'),
-                    subtitle: const Text('Play sound on warnings'),
-                    secondary: const Icon(Icons.volume_up),
-                    value: _soundEnabled,
-                    onChanged: (value) {
-                      setState(() => _soundEnabled = value);
-                    },
-                  ),
-                  
-                  const Divider(),
-                  
-                  SwitchListTile(
-                    title: const Text('Break Reminders'),
-                    subtitle: Text(
-                      _breakReminderEnabled
-                          ? 'Remind every $_breakReminderInterval minutes'
-                          : 'Disabled',
-                    ),
-                    secondary: const Icon(Icons.timer),
-                    value: _breakReminderEnabled,
-                    onChanged: (value) {
-                      setState(() => _breakReminderEnabled = value);
-                    },
-                  ),
-                  
-                  if (_breakReminderEnabled) ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Reminder interval: $_breakReminderInterval minutes'),
-                          Slider(
-                            value: _breakReminderInterval.toDouble(),
-                            min: 10,
-                            max: 60,
-                            divisions: 10,
-                            label: '$_breakReminderInterval min',
-                            onChanged: (value) {
-                              setState(() => _breakReminderInterval = value.toInt());
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          
           const SizedBox(height: 24),
-          
           Row(
             children: [
               Expanded(
-                child: OutlinedButton(
-                  onPressed: _resetToDefaults,
-                  child: const Text('Reset to Defaults'),
-                ),
+                child: SecondaryButton(label: 'Reset defaults', onPressed: _reset),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: ElevatedButton(
-                  onPressed: _saveSettings,
-                  child: const Text('Save Settings'),
-                ),
+                child: PrimaryButton(label: 'Save', onPressed: _save),
               ),
             ],
           ),
-          
-          const SizedBox(height: 16),
-          
-          // About Card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Theme.of(context).colorScheme.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'About',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.apps),
-                    title: Text('KeepMe Away'),
-                    subtitle: Text('Version 1.0.0'),
-                  ),
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.gavel),
-                    title: Text('License'),
-                    subtitle: Text('MIT License'),
-                  ),
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.code),
-                    title: Text('Source Code'),
-                    subtitle: Text('github.com/Priyanshu-5257/keepme-away'),
-                  ),
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.psychology),
-                    title: Text('Face Detection'),
-                    subtitle: Text('MediaPipe BlazeFace (Apache 2.0)'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.amber.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Column(
+          const SizedBox(height: 24),
+          AppCard(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Settings Help:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                Text('About', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.apps_outlined),
+                  title: Text('KeepMe Away'),
+                  subtitle: Text('Version 1.0.0'),
                 ),
-                SizedBox(height: 4),
-                Text(
-                  '• Threshold Factor: Higher = less sensitive (need to be very close)\n'
-                  '• Hysteresis Gap: Prevents rapid on/off switching\n'
-                  '• Warning Time: Grace period before screen blocks\n'
-                  '• Detection Threshold: Face detection confidence level',
-                  style: TextStyle(fontSize: 12),
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.visibility_outlined),
+                  title: Text('Distance signal'),
+                  subtitle: Text('Inter-eye distance · BlazeFace (Apache 2.0)'),
+                ),
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.code_outlined),
+                  title: Text('Source'),
+                  subtitle: Text('github.com/Priyanshu-5257/keepme-away'),
                 ),
               ],
             ),

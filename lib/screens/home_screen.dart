@@ -4,6 +4,8 @@ import 'dart:io';
 import '../services/protection_service.dart';
 import '../utils/prefs.dart';
 import '../utils/page_transitions.dart';
+import '../utils/theme_provider.dart';
+import '../widgets/app_ui.dart';
 import 'calibration_screen.dart';
 import 'settings_screen.dart';
 import 'statistics_screen.dart';
@@ -16,15 +18,15 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _isProtectionActive = false;
-  bool _isLoading = false;
+  bool _active = false;
+  bool _loading = false;
   Timer? _statusTimer;
 
   @override
   void initState() {
     super.initState();
-    _checkProtectionStatus();
-    _startStatusUpdates();
+    _refreshStatus();
+    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshStatus());
   }
 
   @override
@@ -33,316 +35,236 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _startStatusUpdates() {
-    _statusTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      _checkProtectionStatus();
-    });
+  Future<void> _refreshStatus() async {
+    if (!Platform.isAndroid) return;
+    final running = await ProtectionService.isRunning();
+    if (!mounted) return;
+    setState(() => _active = running);
+    PrefsHelper.setIsProtectionActive(running);
   }
 
-  Future<void> _checkProtectionStatus() async {
-    if (Platform.isAndroid) {
-      final isRunning = await ProtectionService.isRunning();
-      if (mounted) {
-        setState(() {
-          _isProtectionActive = isRunning;
-        });
-        
-        // Update preferences
-        PrefsHelper.setIsProtectionActive(isRunning);
-      }
+  Future<void> _toggle() async {
+    if (_loading) return;
+    if (!PrefsHelper.getIsCalibrated()) {
+      _goCalibrate();
+      return;
     }
-  }
-
-  Future<void> _toggleProtection() async {
-    if (_isLoading) return;
-
-    setState(() => _isLoading = true);
-
+    setState(() => _loading = true);
     try {
-      if (_isProtectionActive) {
-        // Stop protection
-        final success = await ProtectionService.stop();
-        if (success) {
+      if (_active) {
+        final ok = await ProtectionService.stop();
+        if (ok) {
           await PrefsHelper.setIsProtectionActive(false);
-          setState(() => _isProtectionActive = false);
-          _showSnackBar('Protection stopped');
+          setState(() => _active = false);
+          _toast('Protection paused');
         } else {
-          _showSnackBar('Failed to stop protection');
+          _toast('Couldn’t stop protection');
         }
       } else {
-        // Start protection
-        final success = await ProtectionService.start(
-          baselineArea: PrefsHelper.getBaselineArea(),
+        final ok = await ProtectionService.start(
+          baselineIod: PrefsHelper.getBaselineIod(),
           thresholdFactor: PrefsHelper.getThresholdFactor(),
           hysteresisGap: PrefsHelper.getHysteresisGap(),
           warningTime: PrefsHelper.getWarningTime(),
           detectionThreshold: PrefsHelper.getDetectionThreshold(),
         );
-        
-        if (success) {
+        if (ok) {
           await PrefsHelper.setIsProtectionActive(true);
-          setState(() => _isProtectionActive = true);
-          _showSnackBar('Protection started');
+          setState(() => _active = true);
+          _toast('Protection is on — you can leave the app');
         } else {
-          _showSnackBar('Failed to start protection');
+          _toast('Couldn’t start protection');
         }
       }
     } catch (e) {
-      _showSnackBar('Error: $e');
+      _toast('Error: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _navigateToCalibration() {
+  void _goCalibrate() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const CalibrationScreen()),
+      PageTransitions.fadeScale(const CalibrationScreen()),
     );
   }
 
-  void _navigateToSettings() {
-    Navigator.of(context).push(
-      PageTransitions.slideFromRight(const SettingsScreen()),
-    );
-  }
-
-  void _navigateToStatistics() {
-    Navigator.of(context).push(
-      PageTransitions.fadeScale(const StatisticsScreen()),
-    );
-  }
-
-  Future<void> _resetCalibration() async {
+  Future<void> _reset() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Reset Calibration'),
-        content: const Text('This will clear your current calibration and stop protection. Continue?'),
+        title: const Text('Reset calibration?'),
+        content: const Text(
+          'This clears your comfortable distance and stops protection.',
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel'),
           ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
             child: const Text('Reset'),
           ),
         ],
       ),
     );
-
-    if (confirm == true) {
-      // Stop protection first
-      await ProtectionService.stop();
-      
-      // Clear calibration
-      await PrefsHelper.clearCalibration();
-      
-      // Navigate to calibration
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const CalibrationScreen()),
-        );
-      }
-    }
+    if (confirm != true) return;
+    await ProtectionService.stop();
+    await PrefsHelper.clearCalibration();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const CalibrationScreen()),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final baseline = PrefsHelper.getBaselineArea();
-    final isCalibrated = PrefsHelper.getIsCalibrated();
+    final scheme = Theme.of(context).colorScheme;
+    final closer = PrefsHelper.percentCloser(PrefsHelper.getThresholdFactor());
+    final calibrated = PrefsHelper.getIsCalibrated();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('KeepMe Away'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
-            onPressed: _navigateToStatistics,
-            icon: const Icon(Icons.bar_chart),
             tooltip: 'Statistics',
+            onPressed: () => Navigator.of(context).push(
+              PageTransitions.fadeScale(const StatisticsScreen()),
+            ),
+            icon: const Icon(Icons.insights_outlined),
           ),
           IconButton(
-            onPressed: _navigateToSettings,
-            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context).push(
+              PageTransitions.slideFromRight(const SettingsScreen()),
+            ),
+            icon: const Icon(Icons.settings_outlined),
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Status Card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          _isProtectionActive ? Icons.shield : Icons.shield_outlined,
-                          color: _isProtectionActive ? Colors.green : Colors.grey,
-                          size: 32,
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Protection Status',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            Text(
-                              _isProtectionActive ? 'Active' : 'Inactive',
-                              style: TextStyle(
-                                color: _isProtectionActive ? Colors.green : Colors.grey,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    
-                    if (_isProtectionActive) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text(
-                          '✓ Your screen is being protected. You can minimize the app.',
-                          style: TextStyle(color: Colors.green),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Calibration Info
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Calibration Info',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 8),
-                    Text('Calibrated: ${isCalibrated ? 'Yes' : 'No'}'),
-                    if (isCalibrated) ...[
-                      Text('Baseline Area: ${baseline.toStringAsFixed(4)}'),
-                      Text('Threshold Factor: ${PrefsHelper.getThresholdFactor()}'),
-                      Text('Warning Time: ${PrefsHelper.getWarningTime()}s'),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Main Control Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _toggleProtection,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isProtectionActive ? Colors.red : Colors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      )
-                    : Text(
-                        _isProtectionActive ? 'Stop Protection' : 'Start Protection',
-                        style: const TextStyle(fontSize: 16),
-                      ),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Secondary Actions
-            Row(
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        children: [
+          AppCard(
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+            child: Column(
               children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _navigateToCalibration,
-                    child: const Text('Recalibrate'),
+                BrandRings(
+                  size: 148,
+                  color: _active ? const Color(0xFF3DDC97) : AppColors.ring,
+                  child: Icon(
+                    _active ? Icons.shield_rounded : Icons.shield_outlined,
+                    size: 48,
+                    color: _active ? const Color(0xFF3DDC97) : scheme.primary,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _resetCalibration,
-                    child: const Text('Reset'),
-                  ),
+                const SizedBox(height: 12),
+                Text(
+                  _active ? 'Protection on' : 'Protection off',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _active
+                      ? 'Watching your viewing distance in the background.'
+                      : calibrated
+                          ? 'Start when you sit down with a screen.'
+                          : 'Calibrate once, then start protection.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.62),
+                      ),
                 ),
               ],
             ),
-            
-            const Spacer(),
-            
-            // Help Text
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+          ),
+          const SizedBox(height: 20),
+          PrimaryButton(
+            label: _active ? 'Stop protection' : 'Start protection',
+            icon: _active ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            color: _active ? const Color(0xFFD64545) : null,
+            loading: _loading,
+            onPressed: _toggle,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: SecondaryButton(
+                  label: 'Recalibrate',
+                  onPressed: _goCalibrate,
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'How it works:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    '• The app monitors your face distance using the front camera\n'
-                    '• When you get too close, you\'ll see a warning countdown\n'
-                    '• If you stay too close, the screen will be blocked\n'
-                    '• All processing is done on-device for privacy\n'
-                    '• Powered by open-source models (no Google services)',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  if (Platform.isAndroid) ...[
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Note: The protection runs in the background. You can use the notification to stop or recalibrate.',
-                      style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic),
-                    ),
-                  ],
-                ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: SecondaryButton(
+                  label: 'Reset',
+                  onPressed: _reset,
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('How it works', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                _HowRow(
+                  icon: Icons.visibility_outlined,
+                  text: 'Uses the distance between your eyes, not a face box.',
+                ),
+                _HowRow(
+                  icon: Icons.tune_rounded,
+                  text: calibrated
+                      ? 'Warns when you sit about $closer% closer than calibrated.'
+                      : 'Calibrate at the distance that feels easy on your eyes.',
+                ),
+                _HowRow(
+                  icon: Icons.lock_outline,
+                  text: 'Frames never leave this phone. Nothing is saved or uploaded.',
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HowRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _HowRow({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: scheme.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.72),
+                  ),
+            ),
+          ),
+        ],
       ),
     );
   }
